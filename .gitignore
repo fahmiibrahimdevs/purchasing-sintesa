@@ -1,0 +1,9 @@
+node_modules/
+client/dist/
+client/.env
+server/.env
+*.env.local
+server/storage/private/*
+!server/storage/private/.gitkeep
+*.log
+.DS_Store

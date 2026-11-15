@@ -1,0 +1,20 @@
+[Unit]
+Description=Procura Purchasing and Tax Invoice App
+After=network-online.target mariadb.service
+Wants=network-online.target
+Requires=mariadb.service
+
+[Service]
+Type=simple
+User=pti-app
+Group=pti-app
+WorkingDirectory=/var/www/projects/purchasing-sintesa/server
+EnvironmentFile=/var/www/projects/purchasing-sintesa/server/.env
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/local/bin/bun run src/index.ts
+Restart=on-failure
+RestartSec=5
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

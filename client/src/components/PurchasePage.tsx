@@ -1,0 +1,360 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft, Banknote, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, CircleAlert, Download, Eye, FileUp, LoaderCircle, Pencil, Plus, ReceiptText, Search, ShoppingBag, Table2, Rows3, Trash2 } from "lucide-react";
+import { api, dateText, dateTimeText, downloadFile, jsonBody, money, quantityText } from "../lib/api";
+import { useDebouncedValue } from "../lib/hooks";
+import { InvoiceAttachment, PageResult, Project, PurchaseDocument, PurchaseItem, Supplier, User } from "../types";
+import { Button, EmptyState, ErrorBanner, Field, inputClass, LoadingState, Modal, SectionHeading, StatusBadge, SummaryCards } from "./common";
+import { SearchableSelect } from "./SearchableSelect";
+
+type Props = { user: User; notify: (message: string, kind?: "success" | "error") => void };
+type PurchaseEditorRoute = { mode: "new" } | { mode: "edit"; id: string } | null;
+type AttachmentPreview = Pick<InvoiceAttachment, "id" | "original_filename" | "mime_type"> & Partial<Pick<InvoiceAttachment, "nsfp" | "invoice_date">> & { uploaded_at?: string };
+type PurchaseSourceAttachment = AttachmentPreview & { category: string; file_size: number; uploaded_at: string };
+type PurchaseSummary = { purchase_documents_this_month: number; purchase_value_this_month: number; total_items: number; items_requiring_invoice: number; missing_invoice_file_items: number };
+type ItemDraft = { project_id: string; item_name: string; item_description: string; quantity: string; uom: string; unit_price: string; purchase_tax_amount: string; invoice_requirement: "REQUIRED" | "NOT_REQUIRED"; item_notes: string };
+const newItem = (): ItemDraft => ({ project_id: "", item_name: "", item_description: "", quantity: "1", uom: "Unit", unit_price: "0", purchase_tax_amount: "0", invoice_requirement: "REQUIRED", item_notes: "" });
+const numeric = (value: string) => Number.isFinite(Number(value)) ? Number(value) : 0;
+const decimalInputValue = (value: string | number) => Number.isFinite(Number(value)) ? String(Number(value)) : "0";
+const formatRupiahDraft = (value: string) => {
+  if (!value) return "";
+  const [whole = "0", fraction] = value.split(".");
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return fraction === undefined ? grouped : `${grouped},${fraction}`;
+};
+const parseRupiahDraft = (value: string) => {
+  if (!value) return "";
+  const sanitized = value.replace(/[^\d,]/g, "");
+  const comma = sanitized.indexOf(",");
+  const integer = (comma < 0 ? sanitized : sanitized.slice(0, comma)).replace(/^0+(?=\d)/, "") || (sanitized ? "0" : "");
+  if (comma < 0) return integer;
+  const fraction = sanitized.slice(comma + 1).replace(/\D/g, "").slice(0, 2);
+  return `${integer || "0"}.${fraction}`;
+};
+const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+const amount = (item: ItemDraft) => roundMoney(numeric(item.quantity) * numeric(item.unit_price));
+const itemTotal = (item: ItemDraft) => roundMoney(amount(item) + numeric(item.purchase_tax_amount));
+
+function RupiahInput({ value, onChange, compact = false, ariaLabel }: { value: string; onChange: (value: string) => void; compact?: boolean; ariaLabel: string }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  function handleChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const input = event.currentTarget;
+    const caret = input.selectionStart ?? input.value.length;
+    const prefix = input.value.slice(0, caret);
+    const integerDigitsBefore = prefix.split(",")[0].replace(/\D/g, "").length;
+    const hasDecimalBefore = prefix.includes(",");
+    const fractionDigitsBefore = hasDecimalBefore ? prefix.slice(prefix.indexOf(",") + 1).replace(/\D/g, "").length : 0;
+    const nextValue = parseRupiahDraft(input.value);
+    const displayValue = formatRupiahDraft(nextValue);
+    onChange(nextValue);
+    requestAnimationFrame(() => {
+      const node = inputRef.current;
+      if (!node || document.activeElement !== node) return;
+      const decimalPosition = displayValue.indexOf(",");
+      const integerEnd = decimalPosition < 0 ? displayValue.length : decimalPosition;
+      let position = 0;
+      let digits = 0;
+      while (position < integerEnd && digits < integerDigitsBefore) {
+        if (/\d/.test(displayValue[position])) digits += 1;
+        position += 1;
+      }
+      if (hasDecimalBefore && decimalPosition >= 0) {
+        position = decimalPosition + 1;
+        let fractionDigits = 0;
+        while (position < displayValue.length && fractionDigits < fractionDigitsBefore) {
+          if (/\d/.test(displayValue[position])) fractionDigits += 1;
+          position += 1;
+        }
+      }
+      node.setSelectionRange(position, position);
+    });
+  }
+  return <div className="flex h-[42px] min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white transition focus-within:border-blue-400 focus-within:ring-4 focus-within:ring-blue-100"><span className={`flex shrink-0 items-center border-r border-slate-200 bg-slate-50 font-medium text-slate-600 ${compact ? "px-1.5 text-[11px]" : "px-2 text-xs"}`}>Rp</span><input ref={inputRef} type="text" inputMode="decimal" autoComplete="off" className={`min-w-0 flex-1 bg-transparent text-right tabular-nums text-slate-900 outline-none ${compact ? "px-1.5 text-xs" : "px-3 text-sm"}`} value={formatRupiahDraft(value)} onChange={handleChange} aria-label={ariaLabel} /></div>;
+}
+
+function RupiahCalculatedInput({ value, ariaLabel }: { value: number; ariaLabel: string }) {
+  const formatted = new Intl.NumberFormat("id-ID", { maximumFractionDigits: 0 }).format(value);
+  return <div className="flex h-[42px] min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-50"><span className="flex shrink-0 items-center border-r border-slate-200 bg-slate-100 px-2 text-xs font-medium text-slate-600">Rp</span><input className="min-w-0 flex-1 bg-transparent px-2 text-right text-xs font-medium tabular-nums text-slate-800 outline-none" value={formatted} readOnly aria-label={ariaLabel} /></div>;
+}
+
+function purchaseEditorFromHash(): PurchaseEditorRoute {
+  const [page, action, id] = window.location.hash.slice(1).split("/");
+  if (page !== "purchases") return null;
+  if (action === "new") return { mode: "new" };
+  if (action === "edit" && id) return { mode: "edit", id: decodeURIComponent(id) };
+  return null;
+}
+
+export function PurchasePage({ user, notify }: Props) {
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(15);
+  const [search, setSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(search.trim());
+  const [supplierId, setSupplierId] = useState("");
+  const [view, setView] = useState<"grouped" | "flat">("flat");
+  const [openIds, setOpenIds] = useState<Set<string>>(new Set());
+  const [editorRoute, setEditorRoute] = useState<PurchaseEditorRoute>(purchaseEditorFromHash);
+  const queryClient = useQueryClient();
+  const { data: summary, isLoading: summaryLoading } = useQuery({ queryKey: ["dashboard"], queryFn: () => api<PurchaseSummary>("/api/dashboard-summary") });
+  const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+  if (debouncedSearch) params.set("q", debouncedSearch);
+  if (supplierId) params.set("supplierId", supplierId);
+  const { data, isLoading, error } = useQuery({ queryKey: ["purchases", page, pageSize, debouncedSearch, supplierId], queryFn: () => api<PageResult<PurchaseDocument>>(`/api/purchase-documents?${params}`) });
+  const { data: suppliers = [] } = useQuery({ queryKey: ["suppliers"], queryFn: () => api<Supplier[]>("/api/suppliers") });
+  const editorId = editorRoute?.mode === "edit" ? editorRoute.id : "";
+  const { data: editorDocument, isLoading: editorLoading, error: editorError } = useQuery({ queryKey: ["purchase-detail", editorId], queryFn: () => api<PurchaseDocument>(`/api/purchase-documents/${encodeURIComponent(editorId)}`), enabled: Boolean(editorId) });
+  const canCreate = user.role === "PURCHASING" || user.role === "ADMIN";
+  useEffect(() => {
+    const syncEditor = () => setEditorRoute(purchaseEditorFromHash());
+    window.addEventListener("popstate", syncEditor);
+    window.addEventListener("hashchange", syncEditor);
+    return () => { window.removeEventListener("popstate", syncEditor); window.removeEventListener("hashchange", syncEditor); };
+  }, []);
+  function openEditor(next: Exclude<PurchaseEditorRoute, null>) {
+    const path = next.mode === "new" ? "#purchases/new" : `#purchases/edit/${encodeURIComponent(next.id)}`;
+    window.history.pushState({ purchaseEditor: true }, "", path);
+    setEditorRoute(next);
+  }
+  function closeEditor() {
+    if (window.history.state?.purchaseEditor) {
+      window.history.back();
+      return;
+    }
+    window.history.replaceState({}, "", "#purchases");
+    setEditorRoute(null);
+  }
+
+  const flatRows = useMemo(() => (data?.data || []).flatMap((doc) => doc.items.map((item) => ({ ...item, document: doc }))), [data]);
+  const total = data?.total ?? 0;
+  const totalPages = Math.max(1, data?.totalPages ?? 1);
+  const firstItem = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const lastItem = Math.min(page * pageSize, total);
+  const visiblePageCount = Math.min(5, totalPages);
+  const firstVisiblePage = Math.min(Math.max(1, page - 2), Math.max(1, totalPages - visiblePageCount + 1));
+  const visiblePages = Array.from({ length: visiblePageCount }, (_, index) => firstVisiblePage + index);
+  const toggle = (id: string) => setOpenIds((previous) => { const next = new Set(previous); next.has(id) ? next.delete(id) : next.add(id); return next; });
+  const cards = [
+    { label: "Pembelian bulan ini", value: summary?.purchase_documents_this_month ?? 0, unit: "dokumen", detail: "Jumlah transaksi yang dicatat bulan ini", loading: summaryLoading, icon: ShoppingBag, tone: "blue" as const },
+    { label: "Nilai pembelian bulan ini", value: money(summary?.purchase_value_this_month ?? 0), detail: "Total nilai transaksi bulan ini", loading: summaryLoading, icon: Banknote, tone: "emerald" as const },
+    { label: "Barang perlu faktur", value: `${summary?.items_requiring_invoice ?? 0}/${summary?.total_items ?? 0}`, unit: "barang", detail: "Jumlah barang wajib faktur dari semua barang pembelian", loading: summaryLoading, icon: ReceiptText, tone: "violet" as const },
+    { label: "Belum ada faktur", value: `${summary?.missing_invoice_file_items ?? 0}/${summary?.items_requiring_invoice ?? 0}`, unit: "barang", detail: "Belum memiliki file faktur pajak yang diunggah", loading: summaryLoading, icon: CircleAlert, tone: "amber" as const },
+  ];
+
+  if (editorRoute) {
+    const backAction = <Button variant="secondary" onClick={closeEditor}><ArrowLeft size={16} />Kembali ke Pembelian</Button>;
+    if (editorRoute.mode === "edit" && editorLoading) return <div><SectionHeading title="Edit Pembelian" description="Memuat data transaksi untuk diedit." action={backAction} /><LoadingState label="Mengambil detail pembelian…" /></div>;
+    if (editorRoute.mode === "edit" && (editorError || !editorDocument)) return <div><SectionHeading title="Edit Pembelian" description="Detail transaksi tidak dapat dimuat." action={backAction} /><ErrorBanner message={editorError instanceof Error ? editorError.message : "Dokumen pembelian tidak ditemukan."} /></div>;
+    return <PurchaseEditorPage key={editorRoute.mode === "edit" ? editorRoute.id : "new"} suppliers={suppliers} document={editorRoute.mode === "edit" ? editorDocument : undefined} onClose={closeEditor} notify={notify} onSaved={() => { closeEditor(); setPage(1); queryClient.invalidateQueries({ queryKey: ["purchases"] }); queryClient.invalidateQueries({ queryKey: ["invoice-source-notes"] }); queryClient.invalidateQueries({ queryKey: ["dashboard"] }); }} />;
+  }
+
+  return <div>
+    <SectionHeading title="Kelola Pembelian" description="Catat transaksi pemasok, pantau kelengkapan faktur, dan telusuri barang dalam setiap pembelian." action={canCreate && <Button onClick={() => openEditor({ mode: "new" })}><Plus size={16} />Tambah Pembelian</Button>} />
+    <SummaryCards cards={cards} columns={4} />
+    <section className="mb-4 rounded-2xl border border-slate-200 bg-white p-2 shadow-card">
+      <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
+        <div className="relative min-w-[220px] flex-1"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} /><input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} className={`${inputClass} pl-9`} placeholder="Cari kode, supplier, dokumen, barang…" /></div>
+        <SearchableSelect className={`${inputClass} lg:w-[220px]`} value={supplierId} placeholder="Semua supplier" searchPlaceholder="Cari supplier…" options={suppliers.map((s) => ({ value: s.id, label: s.name, sublabel: s.supplier_code }))} onChange={(value) => { setSupplierId(value); setPage(1); }} />
+        <div className="inline-flex w-fit shrink-0 items-center rounded-xl bg-slate-100 p-1">
+          <button type="button" onClick={() => setView("grouped")} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold ${view === "grouped" ? "bg-white text-blue-700 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}><Rows3 size={15} />Grouped</button>
+          <button type="button" onClick={() => setView("flat")} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold ${view === "flat" ? "bg-white text-blue-700 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}><Table2 size={15} />Per barang</button>
+        </div>
+      </div>
+    </section>
+    <ErrorBanner message={error instanceof Error ? error.message : null} />
+    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-card">
+      {isLoading ? <LoadingState label="Mengambil daftar pembelian…" /> : !data?.data.length ? <div className="p-5"><EmptyState title="Belum ada dokumen pembelian" description="Tambahkan transaksi pertama untuk mulai mencatat barang dan kebutuhan faktur." /></div> : view === "grouped" ? <div className="overflow-x-auto"><table className="w-full min-w-[1000px] whitespace-nowrap text-left text-sm">
+        <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-600"><tr><th className="w-10 px-4 py-2.5"></th><th className="px-4 py-2.5">Kode kelompok / tanggal</th><th className="px-4 py-2.5">Supplier</th><th className="px-4 py-2.5">No. nota pembelian</th><th className="px-4 py-2.5 text-center">Jumlah barang</th><th className="px-4 py-2.5 text-right">Total</th><th className="px-4 py-2.5">Faktur terunggah</th><th className="px-4 py-2.5">Aksi</th></tr></thead>
+        <tbody className="divide-y divide-slate-100">{data.data.map((doc) => <PurchaseGroupRow key={doc.id} doc={doc} expanded={openIds.has(doc.id)} toggle={() => toggle(doc.id)} user={user} onEdit={() => openEditor({ mode: "edit", id: doc.id })} onUpload={async (file) => { const form = new FormData(); form.append("file", file); form.append("owner_type", "PURCHASE"); form.append("owner_id", doc.id); try { await api("/api/attachments", { method: "POST", body: form }); queryClient.invalidateQueries({ queryKey: ["purchase-files", doc.id] }); notify("Dokumen sumber berhasil diunggah.", "success"); } catch (e: any) { notify(e.message, "error"); } }} />)}</tbody>
+      </table></div> : <div className="overflow-x-auto"><table className="w-full min-w-[1350px] whitespace-nowrap text-left text-sm">
+      <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-600"><tr><th className="px-4 py-2.5">Tanggal</th><th className="px-4 py-2.5">Supplier</th><th className="px-4 py-2.5">Project</th><th className="px-4 py-2.5">Nama barang</th><th className="px-4 py-2.5 text-right">Qty</th><th className="px-4 py-2.5">UOM</th><th className="px-4 py-2.5 text-right">Sub Total</th><th className="px-4 py-2.5 text-right">PPN</th><th className="px-4 py-2.5 text-right">Total</th><th className="px-4 py-2.5">Tanggal faktur</th><th className="px-4 py-2.5">Faktur</th><th className="px-4 py-2.5">Aksi</th></tr></thead>
+        <tbody className="divide-y divide-slate-100">{flatRows.map(({ document, ...item }) => <PurchaseItemRow key={item.id} document={document} item={item} user={user} />)}</tbody>
+      </table></div>}
+    </section>
+    <footer aria-label="Pagination pembelian" className="mt-3 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-card sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <span>Menampilkan <strong className="font-semibold text-slate-800">{firstItem} - {lastItem}</strong> dari <strong className="font-semibold text-slate-800">{total}</strong> data</span>
+        <span className="hidden h-6 border-l border-slate-200 sm:block" aria-hidden="true" />
+        <label className="flex items-center gap-2 text-xs text-slate-500">Per hal:
+          <select aria-label="Jumlah data per halaman" className="h-8 rounded-lg border border-slate-200 bg-white px-2.5 text-sm font-medium text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100" value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setPage(1); }}>
+            {[15, 25, 50].map((size) => <option key={size} value={size}>{size}</option>)}
+          </select>
+        </label>
+      </div>
+      <nav aria-label="Navigasi halaman" className="flex flex-wrap items-center gap-1 sm:justify-end">
+        <button type="button" aria-label="Halaman pertama" disabled={page <= 1} onClick={() => setPage(1)} className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"><ChevronsLeft size={15} /></button>
+        <button type="button" aria-label="Halaman sebelumnya" disabled={page <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))} className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"><ChevronLeft size={15} /></button>
+        {visiblePages.map((pageNumber) => <button key={pageNumber} type="button" aria-label={`Halaman ${pageNumber}`} aria-current={pageNumber === page ? "page" : undefined} onClick={() => setPage(pageNumber)} className={`grid h-8 min-w-8 place-items-center rounded-lg border px-2 text-sm font-medium transition ${pageNumber === page ? "border-blue-600 bg-blue-600 text-white shadow-sm" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"}`}>{pageNumber}</button>)}
+        <button type="button" aria-label="Halaman berikutnya" disabled={!data || page >= totalPages} onClick={() => setPage((current) => Math.min(totalPages, current + 1))} className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"><ChevronRight size={15} /></button>
+        <button type="button" aria-label="Halaman terakhir" disabled={!data || page >= totalPages} onClick={() => setPage(totalPages)} className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"><ChevronsRight size={15} /></button>
+      </nav>
+    </footer>
+  </div>;
+}
+
+function PurchaseItemRow({ document, item, user }: { document: PurchaseDocument; item: PurchaseItem; user: User }) {
+  const [preview, setPreview] = useState<{ title: string; files: AttachmentPreview[]; selectedId: string } | null>(null);
+  const canPreviewInvoices = user.role === "TAX_STAFF" || user.role === "ADMIN";
+  const { data: noteFiles = [] } = useQuery({
+    queryKey: ["purchase-files", document.id],
+    queryFn: () => api<PurchaseSourceAttachment[]>(`/api/attachments/purchase/${document.id}`),
+  });
+  const invoiceFiles = item.invoice_attachments || [];
+  const latestInvoice = invoiceFiles[0];
+  const openPreview = (title: string, files: AttachmentPreview[]) => {
+    if (files.length) setPreview({ title, files, selectedId: files[0].id });
+  };
+  const selectedFile = preview?.files.find((file) => file.id === preview.selectedId);
+
+  return <>
+    <tr className="hover:bg-slate-50/70">
+      <td className="px-4 py-2 text-slate-700">{dateText(document.purchase_date)}</td>
+      <td className="px-4 py-2 text-slate-700">{document.supplier_name}</td>
+      <td className="px-4 py-2 text-slate-700">{item.project_name || "—"}</td>
+      <td className="px-4 py-2 font-medium text-slate-800">{item.item_name}</td>
+      <td className="px-4 py-2 text-right tabular-nums">{quantityText(item.quantity)}</td>
+      <td className="px-4 py-2">{item.uom}</td>
+      <td className="px-4 py-2 text-right tabular-nums">{money(item.purchase_subtotal)}</td>
+      <td className="px-4 py-2 text-right tabular-nums">{money(item.purchase_tax_amount)}</td>
+      <td className="px-4 py-2 text-right tabular-nums">{money(item.purchase_total ?? Number(item.purchase_subtotal) + Number(item.purchase_tax_amount || 0))}</td>
+      <td className="px-4 py-2 text-slate-700">{latestInvoice ? dateText(latestInvoice.invoice_date) : Boolean(item.has_uploaded_invoice) && !canPreviewInvoices ? <span className="text-xs text-slate-400">Akses terbatas</span> : "—"}</td>
+      <td className="px-4 py-2"><StatusBadge value={item.invoice_requirement} /></td>
+      <td className="px-4 py-2"><div className="flex items-center gap-2">
+        <Button type="button" variant="secondary" className="px-2.5 py-1.5 text-xs" disabled={!noteFiles.length} title={noteFiles.length ? "Buka nota pembelian" : "Nota pembelian belum diunggah"} onClick={() => openPreview("Nota pembelian", noteFiles)}><Eye size={13} />Nota</Button>
+        <Button type="button" variant="secondary" className="px-2.5 py-1.5 text-xs" disabled={item.invoice_requirement === "NOT_REQUIRED" || !invoiceFiles.length || !canPreviewInvoices} title={item.invoice_requirement === "NOT_REQUIRED" ? "Barang ini ditandai non faktur" : !invoiceFiles.length ? "File faktur belum tersedia" : canPreviewInvoices ? "Buka file faktur" : "Pratinjau faktur hanya tersedia untuk Staff Pajak dan Admin"} onClick={() => openPreview("Faktur pajak", invoiceFiles)}><Eye size={13} />Faktur{invoiceFiles.length > 1 ? ` (${invoiceFiles.length})` : ""}</Button>
+      </div></td>
+    </tr>
+    {preview && selectedFile && <Modal title={preview.title} subtitle={selectedFile.nsfp ? `${selectedFile.nsfp} · ${dateText(selectedFile.invoice_date)}` : selectedFile.uploaded_at ? `Diunggah ${dateTimeText(selectedFile.uploaded_at)}` : undefined} onClose={() => setPreview(null)} size="max-w-5xl">
+      {preview.files.length > 1 && <div className="mb-4 flex flex-wrap gap-2">{preview.files.map((file, index) => <button key={file.id} type="button" onClick={() => setPreview((current) => current ? { ...current, selectedId: file.id } : current)} className={`rounded-lg border px-3 py-2 text-left text-xs transition ${file.id === selectedFile.id ? "border-blue-300 bg-blue-50 text-blue-800" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}><span className="block font-semibold">{file.nsfp || `Nota ${index + 1}`}</span>{file.invoice_date ? <span className="mt-0.5 block">{dateText(file.invoice_date)}</span> : file.uploaded_at ? <span className="mt-0.5 block">{dateTimeText(file.uploaded_at)}</span> : null}</button>)}</div>}
+      <div className="h-[65vh] min-h-[300px] overflow-hidden rounded-xl border border-slate-200 bg-slate-100">{selectedFile.mime_type === "application/pdf" ? <iframe title={`Preview ${preview.title.toLowerCase()}`} src={`/api/attachments/${selectedFile.id}/preview`} className="h-full w-full border-0" /> : <img src={`/api/attachments/${selectedFile.id}/preview`} alt={`Preview ${preview.title.toLowerCase()}`} className="h-full w-full object-contain" />}</div>
+      <div className="mt-3 flex justify-end"><Button type="button" variant="secondary" onClick={() => downloadFile(`/api/attachments/${selectedFile.id}/download`, selectedFile.original_filename)}><Download size={14} />Unduh file</Button></div>
+    </Modal>}
+  </>;
+}
+
+function PurchaseGroupRow({ doc, expanded, toggle, user, onUpload, onEdit }: { doc: PurchaseDocument; expanded: boolean; toggle: () => void; user: User; onUpload: (file: File) => Promise<void>; onEdit: () => void }) {
+  const [uploading, setUploading] = useState(false);
+  const [previewAttachment, setPreviewAttachment] = useState<AttachmentPreview | null>(null);
+  const canPreviewInvoices = user.role === "TAX_STAFF" || user.role === "ADMIN";
+  const canUploadPurchaseNote = user.role === "PURCHASING" || user.role === "ADMIN";
+  const { data: files = [] } = useQuery({ queryKey: ["purchase-files", doc.id], queryFn: () => api<PurchaseSourceAttachment[]>(`/api/attachments/purchase/${doc.id}`), enabled: expanded });
+  const invoiceRequiredItems = doc.items.filter((item) => item.invoice_requirement !== "NOT_REQUIRED");
+  const uploadedInvoiceItems = invoiceRequiredItems.filter((item) => Boolean(item.has_uploaded_invoice)).length;
+  const invoiceProgress = invoiceRequiredItems.length ? uploadedInvoiceItems / invoiceRequiredItems.length : 0;
+  const allInvoicesUploaded = invoiceRequiredItems.length > 0 && uploadedInvoiceItems === invoiceRequiredItems.length;
+  return <>
+    <tr tabIndex={0} aria-expanded={expanded} onClick={toggle} onKeyDown={(event) => { if (event.target !== event.currentTarget) return; if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggle(); } }} className={`cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 ${expanded ? "bg-slate-50/80" : "hover:bg-slate-50/70"}`}>
+      <td className="px-4 py-2"><button onClick={(event) => { event.stopPropagation(); toggle(); }} aria-label={expanded ? "Ciutkan" : "Buka detail"} aria-expanded={expanded} className={`rounded-lg border p-1.5 transition ${expanded ? "border-slate-300 bg-white text-slate-700 shadow-sm" : "border-transparent text-slate-500 hover:border-slate-200 hover:bg-slate-50 hover:text-slate-800"}`}>{expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</button></td>
+      <td className="px-4 py-2"><span className="font-semibold text-slate-900">{doc.purchase_group_code}</span><span className="mt-0.5 block text-xs text-slate-600">{dateText(doc.purchase_date)}</span></td>
+      <td className="px-4 py-2 font-medium text-slate-800">{doc.supplier_name}</td><td className="px-4 py-2 text-slate-700">{doc.supplier_document_no || "—"}</td>
+      <td className="px-4 py-2 text-center tabular-nums">{doc.item_count} barang</td><td className="px-4 py-2 text-right font-medium tabular-nums">{money(doc.total_amount)}</td>
+      <td className="min-w-[160px] px-4 py-2">{invoiceRequiredItems.length ? <div className="min-w-[132px]" title={`${uploadedInvoiceItems} dari ${invoiceRequiredItems.length} barang yang memerlukan faktur sudah memiliki PDF faktur`}><span className={`text-xs font-semibold tabular-nums ${allInvoicesUploaded ? "text-emerald-700" : uploadedInvoiceItems ? "text-blue-700" : "text-amber-700"}`}>{uploadedInvoiceItems} dari {invoiceRequiredItems.length} barang</span><div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-slate-100"><div className={`h-full rounded-full transition-[width] ${allInvoicesUploaded ? "bg-emerald-500" : "bg-blue-500"}`} style={{ width: `${invoiceProgress * 100}%` }} /></div></div> : <span className="text-slate-400">—</span>}</td>
+      <td className="px-4 py-2" onClick={(event) => event.stopPropagation()}>{(user.role === "PURCHASING" || user.role === "ADMIN") && <Button variant="secondary" className="px-2.5 py-1 text-xs" onClick={onEdit}><Pencil size={13} />Edit</Button>}</td>
+    </tr>
+    {expanded && <tr className="bg-slate-50/60"><td colSpan={8} className="px-4 pb-4 pt-2"><div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3 px-1"><div className="text-xs font-semibold text-slate-700">Barang dalam pembelian #{doc.purchase_group_code}</div><div className="flex flex-wrap items-center justify-end gap-2">{files.map((file, index) => <div key={file.id} className="flex max-w-full flex-wrap items-center gap-1 rounded-xl border border-slate-200 bg-white p-1"><span title={file.original_filename} className="max-w-40 truncate px-2 text-xs text-slate-600">{file.original_filename}</span><Button variant="secondary" className="px-2.5 py-1 text-xs" title={`Preview ${file.original_filename}`} onClick={() => setPreviewAttachment(file)}><Eye size={13} />{files.length > 1 ? `Preview ${index + 1}` : "Preview nota"}</Button><Button variant="secondary" className="px-2.5 py-1 text-xs" title={`Unduh ${file.original_filename}`} onClick={() => downloadFile(`/api/attachments/${file.id}/download`, file.original_filename)}><Download size={13} />{files.length > 1 ? `Unduh ${index + 1}` : "Unduh nota"}</Button></div>)}{canUploadPurchaseNote && <label className={`inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition ${uploading ? "pointer-events-none opacity-60" : "cursor-pointer hover:bg-slate-100"}`}>{uploading ? <LoaderCircle size={14} className="animate-spin motion-reduce:animate-none" /> : <FileUp size={14} />}{uploading ? "Mengunggah…" : "Unggah nota"}<input type="file" accept=".pdf,.jpg,.jpeg,.png" disabled={uploading} className="hidden" onChange={async (e) => { const file = e.target.files?.[0]; if (file) { setUploading(true); try { await onUpload(file); } finally { setUploading(false); } } e.currentTarget.value = ""; }} /></label>}</div></div>
+      <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white"><table className="w-full min-w-[1180px] whitespace-nowrap text-left text-xs"><thead className="bg-slate-100 uppercase tracking-wide text-slate-600"><tr><th className="px-3 py-2.5">Kode item</th><th className="px-3 py-2.5">Project</th><th className="px-3 py-2.5">Nama barang</th><th className="px-3 py-2.5 text-right">Qty</th><th className="px-3 py-2.5">UOM</th><th className="px-3 py-2.5 text-right">Sub Total</th><th className="px-3 py-2.5 text-right">PPN</th><th className="px-3 py-2.5 text-right">Total</th><th className="px-3 py-2.5">Faktur</th><th className="px-3 py-2.5">Tanggal faktur</th><th className="px-3 py-2.5">Preview faktur</th></tr></thead><tbody className="divide-y divide-slate-100">{doc.items.map((item) => { const attachments = item.invoice_attachments || []; const latestInvoice = attachments[0]; const emptyLabel = item.invoice_requirement === "NOT_REQUIRED" ? "Non faktur" : !canPreviewInvoices && item.has_uploaded_invoice ? "Akses terbatas" : "Belum diunggah"; return <tr key={item.id} className="odd:bg-white even:bg-slate-50/60 hover:bg-slate-100/70"><td className="px-3 py-2.5 font-medium text-blue-700">{item.item_code}</td><td className="px-3 py-2.5 text-slate-700">{item.project_name || "Tanpa project"}</td><td className="px-3 py-2.5 font-medium text-slate-900">{item.item_name}</td><td className="px-3 py-2.5 text-right tabular-nums text-slate-800">{quantityText(item.quantity)}</td><td className="px-3 py-2.5 text-slate-800">{item.uom}</td><td className="px-3 py-2.5 text-right tabular-nums font-medium text-slate-900">{money(item.purchase_subtotal)}</td><td className="px-3 py-2.5 text-right tabular-nums">{money(item.purchase_tax_amount)}</td><td className="px-3 py-2.5 text-right tabular-nums font-medium text-slate-900">{money(item.purchase_total ?? Number(item.purchase_subtotal) + Number(item.purchase_tax_amount || 0))}</td><td className="px-3 py-2.5"><StatusBadge value={item.invoice_requirement} /></td><td className="px-3 py-2.5 text-slate-600">{latestInvoice ? dateText(latestInvoice.invoice_date) : !canPreviewInvoices && item.has_uploaded_invoice ? "Akses terbatas" : "—"}</td><td className="px-3 py-2.5">{canPreviewInvoices && attachments.length ? <div className="flex flex-wrap gap-1.5">{attachments.map((attachment, index) => <button key={attachment.id} type="button" aria-label={`Preview faktur ${attachment.nsfp}`} title={`${attachment.nsfp} · ${attachment.original_filename}`} onClick={() => setPreviewAttachment(attachment)} className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-white px-2.5 py-1.5 font-medium text-blue-700 transition hover:border-blue-300 hover:bg-blue-50"><Eye size={13} />{attachments.length > 1 ? `Preview ${index + 1}` : "Preview"}</button>)}</div> : <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs italic text-slate-500">{emptyLabel}</span>}</td></tr>; })}</tbody></table></div>
+    </div></td></tr>}
+    {previewAttachment && createPortal(<Modal title={previewAttachment.original_filename} subtitle={previewAttachment.nsfp ? `Faktur ${previewAttachment.nsfp} · ${dateText(previewAttachment.invoice_date)}` : "Nota pembelian"} onClose={() => setPreviewAttachment(null)} size="max-w-5xl"><div className="h-[65vh] min-h-[300px] overflow-hidden rounded-xl border border-slate-200 bg-slate-100">{previewAttachment.mime_type === "application/pdf" ? <iframe title={`Preview ${previewAttachment.nsfp ? `faktur ${previewAttachment.nsfp}` : "nota pembelian"}`} src={`/api/attachments/${previewAttachment.id}/preview`} className="h-full w-full border-0" /> : <img src={`/api/attachments/${previewAttachment.id}/preview`} alt={`Preview ${previewAttachment.nsfp ? `faktur ${previewAttachment.nsfp}` : "nota pembelian"}`} className="h-full w-full object-contain" />}</div><div className="mt-3 flex justify-end"><Button variant="secondary" onClick={() => downloadFile(`/api/attachments/${previewAttachment.id}/download`, previewAttachment.original_filename)}><Download size={14} />Unduh file</Button></div></Modal>, document.body)}
+  </>;
+}
+
+function PurchaseEditorPage({ suppliers, document, onClose, onSaved, notify }: { suppliers: Supplier[]; document?: PurchaseDocument; onClose: () => void; onSaved: () => void; notify: (message: string, kind?: "success" | "error") => void }) {
+  const queryClient = useQueryClient();
+  const { data: projects = [] } = useQuery({ queryKey: ["projects"], queryFn: () => api<Project[]>("/api/projects") });
+  const [supplierId, setSupplierId] = useState(document?.supplier_id || "");
+  const [purchaseDate, setPurchaseDate] = useState(document?.purchase_date?.slice(0, 10) || new Date().toISOString().slice(0, 10));
+  const [supplierDocumentNo, setSupplierDocumentNo] = useState(document?.supplier_document_no || "");
+  const [notes, setNotes] = useState(document?.notes || "");
+  const [items, setItems] = useState<ItemDraft[]>(document?.items.map((item) => ({
+    project_id: item.project_id || "", item_name: item.item_name, item_description: item.item_description || "",
+    quantity: decimalInputValue(item.quantity), uom: item.uom, unit_price: decimalInputValue(item.unit_price),
+    purchase_tax_amount: decimalInputValue(item.purchase_tax_amount ?? "0"), invoice_requirement: item.invoice_requirement === "NOT_REQUIRED" ? "NOT_REQUIRED" : "REQUIRED",
+    item_notes: item.item_notes || "",
+  })) || [newItem()]);
+  const [sourceFile, setSourceFile] = useState<File | null>(null);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const subtotal = roundMoney(items.reduce((sum, item) => sum + amount(item), 0));
+  const taxSum = roundMoney(items.reduce((sum, item) => sum + roundMoney(numeric(item.purchase_tax_amount)), 0));
+  const total = roundMoney(subtotal + taxSum);
+  const canSave = Boolean(supplierId) && items.length > 0 && items.every((item) =>
+    item.item_name.trim() && item.uom.trim() && numeric(item.quantity) > 0 && item.unit_price.trim() !== "" && Number.isFinite(Number(item.unit_price)) && Number(item.unit_price) >= 0 &&
+    (item.purchase_tax_amount.trim() === "" || (Number.isFinite(Number(item.purchase_tax_amount)) && Number(item.purchase_tax_amount) >= 0))
+  );
+  const saveDisabledHint = "Isi supplier, nama barang, Qty, UOM, dan Harga yang valid untuk mengaktifkan tombol simpan.";
+  function updateItem<K extends keyof ItemDraft>(index: number, key: K, value: ItemDraft[K]) {
+    setItems((rows) => rows.map((item, i) => i === index ? { ...item, [key]: value } as ItemDraft : item));
+  }
+  async function submit() {
+    if (!canSave) return;
+    setError(""); setSaving(true);
+    try {
+      if (!supplierId) throw new Error("Pilih supplier terlebih dahulu.");
+      const payload = {
+        supplier_id: supplierId, purchase_date: purchaseDate, supplier_document_no: supplierDocumentNo,
+        header_subtotal: subtotal.toFixed(2), header_tax_amount: taxSum.toFixed(2),
+        header_total: total.toFixed(2), notes,
+        items: items.map((item) => ({
+          ...item, quantity: item.quantity, unit_price: item.unit_price,
+          purchase_subtotal: amount(item).toFixed(2), purchase_tax_amount: item.purchase_tax_amount || null,
+          purchase_total: itemTotal(item).toFixed(2),
+          invoice_requirement: item.invoice_requirement,
+        })),
+      };
+      const result = document
+        ? await api<{ id: string }>(`/api/purchase-documents/${document.id}`, { method: "PUT", body: jsonBody(payload) })
+        : await api<{ id: string }>("/api/purchase-documents", { method: "POST", body: jsonBody(payload) });
+      if (sourceFile) {
+        const form = new FormData(); form.append("file", sourceFile); form.append("owner_type", "PURCHASE"); form.append("owner_id", result.id);
+        await api("/api/attachments", { method: "POST", body: form });
+      }
+      queryClient.invalidateQueries({ queryKey: ["purchase-files", result.id] });
+      notify(document ? "Perubahan pembelian berhasil disimpan." : "Pembelian berhasil disimpan.", "success");
+      onSaved();
+    } catch (err: any) { setError(err.message); }
+    finally { setSaving(false); }
+  }
+  return <div className="space-y-1">
+    <SectionHeading title={document ? "Edit Pembelian" : "Tambah Pembelian"} description="Isi informasi dokumen sekali, lalu tambahkan semua barang di transaksi ini." action={<Button variant="secondary" onClick={onClose}><ArrowLeft size={16} />Kembali ke Pembelian</Button>} />
+    <div className="space-y-4">
+    <ErrorBanner message={error} />
+    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-card sm:p-5">
+    <div className="mb-4"><h3 className="font-semibold text-slate-900">Informasi Pembelian</h3><p className="mt-0.5 text-xs text-slate-500">Data pemasok dan dokumen sumber transaksi.</p></div>
+    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+      <Field label="Supplier" required><SearchableSelect className={inputClass} value={supplierId} placeholder="Pilih supplier" searchPlaceholder="Cari supplier…" options={suppliers.filter((s) => s.is_active).map((s) => ({ value: s.id, label: s.name, sublabel: s.supplier_code }))} onChange={setSupplierId} /></Field>
+      <Field label="Tanggal pembelian" required><input type="date" className={inputClass} value={purchaseDate} onChange={(e) => setPurchaseDate(e.target.value)} /></Field>
+      <Field label="No. nota pembelian"><input className={inputClass} value={supplierDocumentNo} onChange={(e) => setSupplierDocumentNo(e.target.value)} placeholder="Nomor nota pembelian dari supplier" /></Field>
+      <div className="md:col-span-2 lg:col-span-3"><Field label="Dokumen sumber" hint="PDF, JPG, atau PNG. Maksimal 15 MB."><input type="file" accept=".pdf,.jpg,.jpeg,.png" className={`${inputClass} file:mr-3 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-blue-700`} onChange={(e) => setSourceFile(e.target.files?.[0] || null)} /></Field></div>
+    </div>
+    </section>
+    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-card sm:p-5">
+    <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h3 className="font-semibold text-slate-900">Barang Pembelian</h3><p className="mt-0.5 text-xs text-slate-500">Catat nilai barang; faktur pajak dihubungkan oleh staf pajak setelah diterbitkan supplier.</p></div><Button type="button" variant="secondary" onClick={() => setItems((rows) => [...rows, newItem()])}><Plus size={15} />Tambah Barang</Button></div>
+    <div className="space-y-3 2xl:hidden">{items.map((item, index) => {
+      const invoiceRequired = item.invoice_requirement === "REQUIRED";
+      return <article key={index} className="rounded-xl border border-slate-200 bg-slate-50/60 p-3 sm:p-4">
+        <div className="mb-3 flex items-center justify-between"><h4 className="text-sm font-semibold text-slate-800">Barang {index + 1}</h4><button type="button" disabled={items.length === 1} onClick={() => setItems((rows) => rows.filter((_, i) => i !== index))} aria-label={`Hapus barang ${index + 1}`} className="grid h-8 w-8 place-items-center rounded-lg bg-rose-600 text-white shadow-sm transition hover:bg-rose-700 focus:outline-none focus:ring-4 focus:ring-rose-100 disabled:cursor-not-allowed disabled:opacity-40"><Trash2 size={15} aria-hidden="true" /></button></div>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="col-span-2"><Field label="Project"><SearchableSelect className={inputClass} value={item.project_id} placeholder="Tanpa project" searchPlaceholder="Cari project…" options={projects.filter((p) => p.is_active).map((p) => ({ value: p.id, label: p.name, sublabel: p.project_code }))} onChange={(value) => updateItem(index, "project_id", value)} /></Field></div>
+          <div className="col-span-2"><Field label="Nama barang"><input className={inputClass} value={item.item_name} onChange={(e) => updateItem(index, "item_name", e.target.value)} placeholder="Nama barang" required /></Field></div>
+          <Field label="Qty"><input className={`${inputClass} min-w-0 tabular-nums`} type="number" step="0.0001" min="0.0001" value={item.quantity} onChange={(e) => updateItem(index, "quantity", e.target.value)} onBlur={() => updateItem(index, "quantity", decimalInputValue(item.quantity))} /></Field>
+          <Field label="UOM"><input className={inputClass} value={item.uom} onChange={(e) => updateItem(index, "uom", e.target.value)} /></Field>
+          <Field label="Harga"><RupiahInput value={item.unit_price} onChange={(value) => updateItem(index, "unit_price", value)} ariaLabel={`Harga barang ${index + 1}`} /></Field>
+          <Field label="PPN"><RupiahInput value={item.purchase_tax_amount} onChange={(value) => updateItem(index, "purchase_tax_amount", value)} ariaLabel={`PPN barang ${index + 1}`} /></Field>
+          <Field label="Sub Total"><RupiahCalculatedInput value={amount(item)} ariaLabel={`Sub Total barang ${index + 1}`} /></Field>
+          <Field label="Total"><RupiahCalculatedInput value={itemTotal(item)} ariaLabel={`Total barang ${index + 1}`} /></Field>
+          <div className="col-span-2 flex min-h-[68px] items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2 sm:col-span-2"><div><p className="text-xs font-medium text-slate-500">Faktur</p><p className={`mt-1 text-sm font-semibold ${invoiceRequired ? "text-blue-700" : "text-slate-500"}`}>{invoiceRequired ? "Perlu faktur" : "Non faktur"}</p></div><button type="button" role="switch" aria-checked={invoiceRequired} aria-label={`${invoiceRequired ? "Faktur" : "Non faktur"} untuk ${item.item_name || `barang ${index + 1}`}`} onClick={() => updateItem(index, "invoice_requirement", invoiceRequired ? "NOT_REQUIRED" : "REQUIRED")} className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-4 focus:ring-blue-100 ${invoiceRequired ? "bg-blue-600" : "bg-slate-300"}`}><span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${invoiceRequired ? "translate-x-6" : "translate-x-1"}`} /></button></div>
+          <div className="col-span-2 sm:col-span-2"><Field label="Ket"><input className={inputClass} value={item.item_notes} onChange={(e) => updateItem(index, "item_notes", e.target.value)} placeholder="Keterangan" aria-label={`Keterangan barang ${index + 1}`} /></Field></div>
+        </div>
+      </article>;
+    })}</div>
+    <div className="hidden overflow-hidden rounded-xl border border-slate-200 2xl:block"><table className="w-full table-fixed whitespace-nowrap text-left text-sm"><colgroup><col style={{ width: "12%" }} /><col style={{ width: "14%" }} /><col style={{ width: "7%" }} /><col style={{ width: "6%" }} /><col style={{ width: "9%" }} /><col style={{ width: "9%" }} /><col style={{ width: "9%" }} /><col style={{ width: "9%" }} /><col style={{ width: "8%" }} /><col style={{ width: "13%" }} /><col style={{ width: "4%" }} /></colgroup><thead className="bg-slate-50 text-[11px] uppercase text-slate-600"><tr><th className="px-2 py-3">Project</th><th className="px-2 py-3">Nama barang</th><th className="px-2 py-3">Qty</th><th className="px-2 py-3">UOM</th><th className="px-2 py-3">Harga</th><th className="px-2 py-3 text-right">Sub Total</th><th className="px-2 py-3">PPN</th><th className="px-2 py-3 text-right">Total</th><th className="px-2 py-3">Faktur</th><th className="px-2 py-3">Ket</th><th className="px-1 py-3"></th></tr></thead><tbody className="divide-y divide-slate-100">{items.map((item, index) => {
+      const invoiceRequired = item.invoice_requirement === "REQUIRED";
+      return <tr key={index} className="align-top"><td className="p-1.5"><SearchableSelect className={`${inputClass} min-w-0 px-2`} value={item.project_id} placeholder="Tanpa project" searchPlaceholder="Cari project…" options={projects.filter((p) => p.is_active).map((p) => ({ value: p.id, label: p.name, sublabel: p.project_code }))} onChange={(value) => updateItem(index, "project_id", value)} /></td><td className="p-1.5"><input className={`${inputClass} min-w-0 px-2`} value={item.item_name} onChange={(e) => updateItem(index, "item_name", e.target.value)} placeholder="Nama barang" required /></td><td className="p-1.5"><input className={`${inputClass} min-w-0 px-2 tabular-nums`} type="number" step="0.0001" min="0.0001" value={item.quantity} onChange={(e) => updateItem(index, "quantity", e.target.value)} onBlur={() => updateItem(index, "quantity", decimalInputValue(item.quantity))} aria-label={`Qty barang ${index + 1}`} /></td><td className="p-1.5"><input className={`${inputClass} min-w-0 px-2`} value={item.uom} onChange={(e) => updateItem(index, "uom", e.target.value)} aria-label={`UOM barang ${index + 1}`} /></td><td className="p-1.5"><RupiahInput compact value={item.unit_price} onChange={(value) => updateItem(index, "unit_price", value)} ariaLabel={`Harga barang ${index + 1}`} /></td><td className="p-1.5"><RupiahCalculatedInput value={amount(item)} ariaLabel={`Sub Total barang ${index + 1}`} /></td><td className="p-1.5"><RupiahInput compact value={item.purchase_tax_amount} onChange={(value) => updateItem(index, "purchase_tax_amount", value)} ariaLabel={`PPN barang ${index + 1}`} /></td><td className="p-1.5"><RupiahCalculatedInput value={itemTotal(item)} ariaLabel={`Total barang ${index + 1}`} /></td><td className="p-1.5"><div className="flex h-10 items-center gap-1"><button type="button" role="switch" aria-checked={invoiceRequired} aria-label={`${invoiceRequired ? "Faktur" : "Non faktur"} untuk ${item.item_name || `barang ${index + 1}`}`} onClick={() => updateItem(index, "invoice_requirement", invoiceRequired ? "NOT_REQUIRED" : "REQUIRED")} className={`relative inline-flex h-5 w-8 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-4 focus:ring-blue-100 ${invoiceRequired ? "bg-blue-600" : "bg-slate-300"}`}><span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${invoiceRequired ? "translate-x-[14px]" : "translate-x-1"}`} /></button><span className={`truncate text-[10px] font-semibold ${invoiceRequired ? "text-blue-700" : "text-slate-500"}`}>{invoiceRequired ? "Faktur" : "Non faktur"}</span></div></td><td className="p-1.5"><input className={`${inputClass} min-w-0 px-2`} value={item.item_notes} onChange={(e) => updateItem(index, "item_notes", e.target.value)} placeholder="Keterangan" aria-label={`Keterangan barang ${index + 1}`} /></td><td className="p-1 align-middle"><div className="flex h-10 items-center justify-center"><button type="button" disabled={items.length === 1} onClick={() => setItems((rows) => rows.filter((_, i) => i !== index))} aria-label={`Hapus barang ${index + 1}`} className="grid h-8 w-8 place-items-center rounded-lg bg-rose-600 text-white shadow-sm transition hover:bg-rose-700 focus:outline-none focus:ring-4 focus:ring-rose-100 disabled:cursor-not-allowed disabled:opacity-40"><Trash2 size={15} aria-hidden="true" /></button></div></td></tr>;
+    })}</tbody></table></div>
+    </section>
+    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-card sm:p-5"><Field label="Catatan transaksi"><textarea className={inputClass} rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Catatan tambahan (opsional)" /></Field></section>
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-card"><div><p className="text-xs text-slate-600">{items.length} barang dalam transaksi</p><p className="text-lg font-semibold tabular-nums text-slate-900">{money(total)}</p></div><div className="flex gap-2"><Button variant="secondary" disabled={saving} onClick={onClose}>Kembali</Button><span className="inline-flex" title={!canSave && !saving ? saveDisabledHint : undefined}><Button loading={saving} disabled={!canSave} onClick={submit}>{saving ? "Menyimpan…" : document ? "Simpan Perubahan" : "Simpan Pembelian"}</Button></span></div></div>
+    </div>
+  </div>;
+}

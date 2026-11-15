@@ -1,0 +1,16 @@
+{
+  "name": "purchasing-tax-invoice",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": ["client", "server"],
+  "scripts": {
+    "dev:server": "cd server && bun run dev",
+    "dev:client": "cd client && bun run dev",
+    "dev": "bun run --parallel dev:server dev:client",
+    "build": "cd client && bun run build",
+    "start": "cd server && bun run start",
+    "seed:admin": "cd server && bun run src/db/seedAdmin.ts",
+    "seed:demo": "cd server && bun run src/db/seedDemo.ts",
+    "reset:demo": "cd server && bun run src/db/resetDemo.ts && bun run src/db/seedDemo.ts"
+  }
+}
