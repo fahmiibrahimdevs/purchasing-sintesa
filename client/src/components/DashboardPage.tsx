@@ -73,8 +73,8 @@ function CategoryPieCard({ data, year }: { data: PieDatum[]; year: number }) {
 
   return <section className="min-w-0 self-start overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-card">
     <div className="border-b border-slate-100 px-4 py-3">
-      <h3 className="text-base font-semibold text-slate-900">Perbandingan kategori</h3>
-      <p className="mt-0.5 text-sm text-slate-500">Nominal tiap kategori pada tahun berjalan.</p>
+      <h3 className="text-base font-semibold text-slate-900">Komposisi pembelian</h3>
+      <p className="mt-0.5 text-sm text-slate-500">Faktur dan non faktur; PPN dirinci terpisah.</p>
     </div>
     <div className="flex flex-col items-center gap-3 p-4">
       <div role="img" aria-label={`Perbandingan kategori tahun ${year}`} className="relative h-40 w-40 shrink-0 rounded-full" style={{ background: donutBackground }}>
@@ -177,16 +177,16 @@ export function DashboardPage({ user, onNavigate }: Props) {
   const summaryCardsLoading = isLoading || analyticsLoading;
   const cards = [
     { label: "Pembelian bulan ini", value: analytics ? money(currentMonth?.purchase_total ?? 0) : "—", icon: ShoppingBag, tone: "blue" as const, detail: summary ? `${summary.purchase_documents_this_month} dokumen` : "Total transaksi" , loading: summaryCardsLoading },
-    { label: "Pembelian faktur bulan ini", value: analytics ? money(currentMonth?.invoice_total ?? 0) : "—", icon: FileCheck2, tone: "emerald" as const, detail: "Dengan faktur pajak", loading: summaryCardsLoading },
+    { label: "Pembelian faktur bulan ini", value: analytics ? money(currentMonth?.invoice_total ?? 0) : "—", icon: FileCheck2, tone: "emerald" as const, detail: "Termasuk PPN", loading: summaryCardsLoading },
     { label: "Pembelian non faktur bulan ini", value: analytics ? money(currentMonth?.non_invoice_total ?? 0) : "—", icon: ClipboardList, tone: "orange" as const, detail: "Tanpa faktur pajak", loading: summaryCardsLoading },
-    { label: "PPN bulan ini", value: analytics ? money(currentMonth?.ppn_total ?? 0) : "—", icon: TrendingUp, tone: "violet" as const, detail: "PPN pembelian", loading: summaryCardsLoading },
+    { label: "PPN bulan ini", value: analytics ? money(currentMonth?.ppn_total ?? 0) : "—", icon: TrendingUp, tone: "violet" as const, detail: "Rincian dari pembelian faktur", loading: summaryCardsLoading },
   ];
 
   return <div><SectionHeading title={`Selamat datang, ${user.name.split(" ")[0]}`} description="Ringkasan operasional pembelian dan faktur untuk periode berjalan." action={user.role === "PURCHASING" || user.role === "ADMIN" ? <Button onClick={() => onNavigate("purchases")}><ShoppingBag size={16} />Buka Pembelian</Button> : <Button onClick={() => onNavigate("invoices")}><ReceiptText size={16} />Buka Faktur Pajak</Button>} />
     <SummaryCards cards={cards} />
 
     <section className="mb-5 space-y-4">
-      <div><h2 className="text-lg font-semibold text-slate-900">Rekap pembelian bulanan</h2><p className="mt-1 text-sm text-slate-600">Tahun {analytics?.year ?? currentYear} · Nilai pembelian termasuk PPN.</p></div>
+      <div><h2 className="text-lg font-semibold text-slate-900">Rekap pembelian bulanan</h2><p className="mt-1 text-sm text-slate-600">Tahun {analytics?.year ?? currentYear} · Nilai pembelian sudah termasuk PPN.</p></div>
       <ErrorBanner message={analyticsError instanceof Error ? analyticsError.message : null} />
       {analyticsLoading ? <div className="rounded-2xl border border-slate-200 bg-white"><LoadingState label="Menghitung rekap bulanan dan project…" /></div> : analytics && <>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -196,7 +196,7 @@ export function DashboardPage({ user, onNavigate }: Props) {
           <CategoryPieCard year={analytics?.year ?? currentYear} data={[
             { label: "Pembelian Faktur", value: totals.invoice_total, color: "#2563eb" },
             { label: "Pembelian Non Faktur", value: totals.non_invoice_total, color: "#059669" },
-            { label: "PPN", value: totals.ppn_total, color: "#7c3aed" },
+            ...(totals.unclassified_total > 0 ? [{ label: "Belum dikategorikan", value: totals.unclassified_total, color: "#94a3b8" }] : []),
           ]} />
         </div>
 
