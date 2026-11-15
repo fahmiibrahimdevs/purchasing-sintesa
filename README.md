@@ -79,6 +79,13 @@ sudo apt update
 sudo apt install -y git nginx mariadb-server certbot python3-certbot-nginx
 ```
 
+Pasang Bun untuk systemd service di lokasi yang dapat dijalankan oleh akun service. Contoh ini mengasumsikan Bun dipasang dengan installer resmi untuk user saat ini:
+
+```sh
+sudo install -d -o root -g root -m 0755 /opt/purchasing-tax-invoice/bin
+sudo install -m 0755 "$HOME/.bun/bin/bun" /opt/purchasing-tax-invoice/bin/bun
+```
+
 ### 2. Clone aplikasi dan build client
 
 ```sh
@@ -94,7 +101,7 @@ sudo bun run build
 Buat akun Linux khusus agar proses aplikasi tidak berjalan sebagai root:
 
 ```sh
-sudo useradd --system --home /var/lib/purchasing-tax-invoice --create-home --shell /usr/sbin/nologin pti-app
+sudo useradd --system --user-group --home /var/lib/purchasing-tax-invoice --create-home --shell /usr/sbin/nologin pti-app
 sudo install -d -o pti-app -g pti-app -m 0700 /var/lib/purchasing-tax-invoice/private
 ```
 
