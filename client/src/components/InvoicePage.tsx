@@ -76,6 +76,15 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify }: Pr
   const { data: suppliers = [] } = useQuery({ queryKey: ["suppliers"], queryFn: () => api<Supplier[]>("/api/suppliers") });
   const { data: projects = [] } = useQuery({ queryKey: ["projects"], queryFn: () => api<Project[]>("/api/projects") });
   const canWork = user.role === "TAX_STAFF" || user.role === "ADMIN";
+  const coverageCounts = useMemo(() => items.reduce((counts, item) => {
+    switch (item.coverage_status) {
+      case "COMPLETE": counts.complete += 1; break;
+      case "PARTIAL": counts.partial += 1; break;
+      case "UNDER_REVIEW": counts.reviewing += 1; break;
+      default: counts.unprocessed += 1; break;
+    }
+    return counts;
+  }, { unprocessed: 0, reviewing: 0, partial: 0, complete: 0 }), [items]);
   const tableGroups = useMemo(() => {
     const groups = new Map<string, InvoiceTableGroup>();
     const getGroup = (key: string, item: PurchaseItem, invoice?: InvoiceLink) => {
@@ -119,7 +128,7 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify }: Pr
       const purchaseQuantity = Number(item.quantity || 0);
       const remainingQuantity = Math.max(0, purchaseQuantity - activeQuantity);
       if (remainingQuantity > 0.0001) {
-        const group = getGroup(`unlinked:${item.purchase_document_id}`, item);
+        const group = getGroup("unlinked", item);
         const ratio = purchaseQuantity > 0 ? remainingQuantity / purchaseQuantity : 0;
         group.entries.push({
           item,
@@ -132,13 +141,15 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify }: Pr
     }
 
     return [...groups.values()].sort((a, b) => {
+      if (!a.invoice) return b.invoice ? 1 : 0;
+      if (!b.invoice) return -1;
       const dateA = a.invoice?.invoice_date || a.purchaseDate;
       const dateB = b.invoice?.invoice_date || b.purchaseDate;
       return dateB.localeCompare(dateA) || (a.invoice?.nsfp || a.purchaseGroupCode).localeCompare(b.invoice?.nsfp || b.purchaseGroupCode);
     });
   }, [items]);
   const filteredTableGroups = useMemo(() => tableGroups.filter((group) => {
-    if (!group.invoice) return false;
+    if (!group.invoice) return !statusFilter;
     if (!statusFilter) return true;
     if (statusFilter === "FILE_REPLACEMENT_PENDING") return Boolean(group.invoice.file_replacement_pending);
     return invoiceTableStatus(group.invoice) === statusFilter;
@@ -191,12 +202,12 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify }: Pr
     } catch (e: any) { notify(e.message, "error"); }
   }
   return <div>
-    <SectionHeading title="Faktur Pajak" description="Kelola antrean dan riwayat faktur dalam satu daftar barang yang memang memerlukan faktur." action={canWork ? <Button onClick={() => onCreateInvoice()}><Plus size={16} />Input Faktur</Button> : undefined} />
+    <SectionHeading title="Faktur Pajak" description="Pantau progres barang wajib faktur: belum diproses, menunggu verifikasi, tercakup sebagian, atau lengkap." action={canWork ? <Button onClick={() => onCreateInvoice()}><Plus size={16} />Input Faktur</Button> : undefined} />
     <SummaryCards cards={[
-      { label: "Barang perlu faktur", value: items.length, unit: "barang", detail: "Hanya barang berstatus Faktur", icon: FileText, tone: "blue", loading: isLoading },
-      { label: "Tercakup lengkap", value: items.filter((item) => item.coverage_status === "COMPLETE").length, unit: "barang", detail: "Jumlah faktur sudah terverifikasi", icon: CheckCircle2, tone: "emerald", loading: isLoading },
-      { label: "Tercakup sebagian", value: items.filter((item) => item.coverage_status === "PARTIAL").length, unit: "barang", detail: "Masih ada qty yang belum tercakup", icon: Clock3, tone: "amber", loading: isLoading },
-      { label: "Menunggu proses", value: items.filter((item) => ["WAITING", "UNDER_REVIEW", "NEEDS_REVIEW"].includes(item.coverage_status || "")).length, unit: "barang", detail: "Menunggu faktur atau pemeriksaan", icon: FileClock, tone: "violet", loading: isLoading },
+      { label: "Belum diproses", value: coverageCounts.unprocessed, unit: "barang", detail: "Belum ada faktur yang diajukan atau masih berupa draft", icon: FileText, tone: "blue", loading: isLoading },
+      { label: "Menunggu verifikasi", value: coverageCounts.reviewing, unit: "barang", detail: "Faktur sudah diajukan dan menunggu pemeriksaan", icon: FileClock, tone: "violet", loading: isLoading },
+      { label: "Tercakup sebagian", value: coverageCounts.partial, unit: "barang", detail: "Sebagian kuantitas sudah diverifikasi", icon: Clock3, tone: "amber", loading: isLoading },
+      { label: "Tercakup lengkap", value: coverageCounts.complete, unit: "barang", detail: "Seluruh kuantitas sudah tercakup dan faktur terverifikasi", icon: CheckCircle2, tone: "emerald", loading: isLoading },
     ]} />
     <div className="mb-4 grid gap-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-card sm:grid-cols-2 xl:grid-cols-[minmax(240px,1fr)_200px_200px_210px]">
       <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} /><input className={`${inputClass} pl-9`} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Cari kode, supplier, nota, project, barang…" /></div>
@@ -220,7 +231,7 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify }: Pr
               <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
                 <div className="flex min-w-0 items-center gap-3">
                   <button type="button" aria-label={collapsed ? "Buka grup faktur" : "Ciutkan grup faktur"} aria-expanded={!collapsed} title={collapsed ? "Buka barang" : "Ciutkan barang"} onClick={() => toggleGroup(group.key)} className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-slate-200 bg-white text-blue-600 shadow-sm transition hover:bg-blue-50">{collapsed ? <Folder size={18} /> : <FolderOpen size={18} />}</button>
-                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1"><span className="font-semibold text-slate-900">{invoice ? <button type="button" aria-label={`Buka detail faktur ${invoice.nsfp}`} title={`Buka detail faktur ${invoice.nsfp}`} onClick={() => setSelectedInvoiceId(invoice.id)} className="group inline-flex items-center gap-1.5 rounded-sm text-left leading-none text-slate-800 transition hover:text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"><span className="leading-none">{invoice.nsfp}</span><ExternalLink size={16} strokeWidth={2.2} aria-hidden="true" className="shrink-0 -translate-y-0.5 text-blue-600 transition group-hover:text-blue-700" /></button> : "Belum ada NSFP"}</span><span className="text-sm font-normal leading-5 text-slate-600">{dateText(invoice?.invoice_date || group.purchaseDate)} <span className="px-1">·</span> {group.supplierName}{!invoice && <> <span className="px-1">·</span> {group.purchaseGroupCode}</>} <span className="px-1">·</span> {group.entries.length} barang</span></div>
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1"><span className="font-semibold text-slate-900">{invoice ? <button type="button" aria-label={`Buka detail faktur ${invoice.nsfp}`} title={`Buka detail faktur ${invoice.nsfp}`} onClick={() => setSelectedInvoiceId(invoice.id)} className="group inline-flex items-center gap-1.5 rounded-sm text-left leading-none text-slate-800 transition hover:text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"><span className="leading-none">{invoice.nsfp}</span><ExternalLink size={16} strokeWidth={2.2} aria-hidden="true" className="shrink-0 -translate-y-0.5 text-blue-600 transition group-hover:text-blue-700" /></button> : "Belum ada nomor faktur"}</span><span className="text-sm font-normal leading-5 text-slate-600">{invoice ? <>{dateText(invoice.invoice_date)} <span className="px-1">·</span> {group.supplierName} <span className="px-1">·</span> {group.entries.length} barang</> : `${group.entries.length} barang belum tertaut ke faktur`}</span></div>
                 </div>
                 <div className="flex flex-1 flex-wrap items-center justify-end gap-x-6 gap-y-2">
                   <div className="flex shrink-0 items-center gap-3"><div className="flex flex-wrap items-center gap-2">{invoice?.file_replacement_pending ? <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800" title="Versi file faktur dibatalkan dan sedang menunggu faktur pengganti."><span className="font-semibold">Versi dibatalkan</span><span aria-hidden="true">·</span>menunggu faktur pengganti</span> : <StatusBadge value={invoiceTableStatus(invoice)} />}</div>{invoice && canWork && <><span aria-hidden="true" className="h-6 border-l border-slate-300" /><div className="flex items-center gap-2"><Button variant="secondary" title={`Edit atau revisi faktur ${invoice.nsfp}`} className="px-2.5 py-1.5 text-xs" disabled={!canEdit} onClick={() => onEditInvoice(invoice.id)}><Pencil size={13} />Edit</Button><Button variant="dangerGhost" title={canDelete ? `Hapus draft ${invoice.nsfp}` : "Hanya faktur berstatus Draft yang bisa dihapus agar riwayat faktur tetap terjaga."} className="px-2.5 py-1.5 text-xs" disabled={!canDelete} onClick={() => void deleteDraftInvoice(invoice)}><Trash2 size={13} />Delete</Button></div></>}</div>
