@@ -7,7 +7,7 @@ const router = new Hono<AppEnv>();
 router.use("*", sessionAuth);
 
 router.get("/suppliers", async (c) => {
-  const [rows] = await pool.query(`SELECT s.id, s.supplier_code, s.name, s.address, s.phone, s.email, s.is_active,
+  const [rows] = await pool.query(`SELECT s.id, s.supplier_code, s.name, s.address, s.phone, s.email, s.default_invoice_requirement, s.is_active,
     (SELECT COUNT(*) FROM purchase_documents pd WHERE pd.supplier_id=s.id) AS purchase_count,
     (SELECT COUNT(*) FROM purchase_documents pd WHERE pd.supplier_id=s.id)
       + (SELECT COUNT(*) FROM tax_invoices ti WHERE ti.supplier_id=s.id)
@@ -20,13 +20,15 @@ router.post("/suppliers", allowRoles("ADMIN"), async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const name = String(body.name || "").trim();
   const code = String(body.supplier_code || `SUP-${crypto.randomUUID().slice(0, 8)}`).trim().toUpperCase();
+  const defaultInvoiceRequirement = String(body.default_invoice_requirement || "REQUIRED").toUpperCase();
   if (!name) return c.json({ error: "Nama supplier wajib diisi." }, 400);
+  if (!["REQUIRED", "NOT_REQUIRED"].includes(defaultInvoiceRequirement)) return c.json({ error: "Status awal faktur supplier tidak valid." }, 400);
   const id = newId();
   await withTransaction(async (conn) => {
-    await conn.execute("INSERT INTO suppliers (id, supplier_code, name, address, phone, email) VALUES (?, ?, ?, ?, ?, ?)", [id, code, name, body.address || null, body.phone || null, body.email || null]);
-    await writeAudit({ userId: c.get("user").id, action: "CREATE", entityType: "SUPPLIER", entityId: id, newValues: { supplier_code: code, name } }, conn);
+    await conn.execute("INSERT INTO suppliers (id, supplier_code, name, address, phone, email, default_invoice_requirement) VALUES (?, ?, ?, ?, ?, ?, ?)", [id, code, name, body.address || null, body.phone || null, body.email || null, defaultInvoiceRequirement]);
+    await writeAudit({ userId: c.get("user").id, action: "CREATE", entityType: "SUPPLIER", entityId: id, newValues: { supplier_code: code, name, default_invoice_requirement: defaultInvoiceRequirement } }, conn);
   });
-  return c.json({ id, supplier_code: code, name }, 201);
+  return c.json({ id, supplier_code: code, name, default_invoice_requirement: defaultInvoiceRequirement }, 201);
 });
 
 router.put("/suppliers/:id", allowRoles("ADMIN"), async (c) => {
@@ -35,10 +37,11 @@ router.put("/suppliers/:id", allowRoles("ADMIN"), async (c) => {
   const [beforeRows] = await pool.execute("SELECT * FROM suppliers WHERE id = ?", [id]);
   const before = (beforeRows as any[])[0];
   if (!before) return c.json({ error: "Supplier tidak ditemukan." }, 404);
-  const updated = { supplier_code: String(body.supplier_code ?? before.supplier_code).trim().toUpperCase(), name: String(body.name ?? before.name).trim(), address: body.address ?? before.address, phone: body.phone ?? before.phone, email: body.email ?? before.email, is_active: body.is_active ?? before.is_active };
+  const updated = { supplier_code: String(body.supplier_code ?? before.supplier_code).trim().toUpperCase(), name: String(body.name ?? before.name).trim(), address: body.address ?? before.address, phone: body.phone ?? before.phone, email: body.email ?? before.email, default_invoice_requirement: String(body.default_invoice_requirement ?? before.default_invoice_requirement ?? "REQUIRED").toUpperCase(), is_active: body.is_active ?? before.is_active };
   if (!updated.name) return c.json({ error: "Nama supplier wajib diisi." }, 400);
+  if (!["REQUIRED", "NOT_REQUIRED"].includes(updated.default_invoice_requirement)) return c.json({ error: "Status awal faktur supplier tidak valid." }, 400);
   await withTransaction(async (conn) => {
-    await conn.execute("UPDATE suppliers SET supplier_code=?, name=?, address=?, phone=?, email=?, is_active=? WHERE id=?", [updated.supplier_code, updated.name, updated.address, updated.phone, updated.email, updated.is_active ? 1 : 0, id]);
+    await conn.execute("UPDATE suppliers SET supplier_code=?, name=?, address=?, phone=?, email=?, default_invoice_requirement=?, is_active=? WHERE id=?", [updated.supplier_code, updated.name, updated.address, updated.phone, updated.email, updated.default_invoice_requirement, updated.is_active ? 1 : 0, id]);
     await writeAudit({ userId: c.get("user").id, action: "UPDATE", entityType: "SUPPLIER", entityId: id, oldValues: before, newValues: updated }, conn);
   });
   return c.json({ id, ...updated });

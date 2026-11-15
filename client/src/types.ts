@@ -1,6 +1,6 @@
 export type Role = "PURCHASING" | "TAX_STAFF" | "ADMIN";
 export type User = { id: string; name: string; email: string; role: Role; is_active?: number; purchase_count?: number | string; related_count?: number | string };
-export type Supplier = { id: string; supplier_code: string; name: string; address?: string; phone?: string; email?: string; is_active: number; purchase_count?: number | string; related_count?: number | string };
+export type Supplier = { id: string; supplier_code: string; name: string; address?: string; phone?: string; email?: string; default_invoice_requirement: "REQUIRED" | "NOT_REQUIRED"; is_active: number; purchase_count?: number | string; related_count?: number | string };
 export type Project = { id: string; project_code: string; name: string; is_active: number; purchase_count?: number | string; related_count?: number | string };
 export type InvoiceAttachment = { id: string; original_filename: string; mime_type: string; file_size: number; nsfp: string; invoice_date: string };
 export type InvoiceLink = {
@@ -14,7 +14,7 @@ export type InvoiceLink = {
 export type PurchaseItem = {
   id: string; purchase_document_id: string; item_code: string; item_sequence: number; project_id?: string | null; supplier_id?: string; supplier_document_no?: string; purchase_group_code?: string; purchase_date?: string; supplier_name?: string;
   project_name?: string; item_name: string; item_description?: string; item_notes?: string; quantity: string | number; uom: string;
-  unit_price: string | number; purchase_subtotal: string | number;
+  unit_price: string | number; unit_price_entered?: string | number | null; purchase_subtotal: string | number;
   purchase_tax_amount?: string | number | null; purchase_total?: string | number | null;
   invoice_requirement: "REQUIRED" | "NOT_REQUIRED";
   active_quantity?: string | number; active_dpp?: string | number; remaining_quantity?: number | null; remaining_dpp?: number | null;
@@ -23,7 +23,7 @@ export type PurchaseItem = {
 };
 export type PurchaseDocument = {
   id: string; purchase_group_code: string; supplier_id: string; supplier_name: string; supplier_code: string;
-  supplier_document_no?: string; purchase_date: string; source_document_type: string; header_subtotal?: string | number;
+  supplier_document_no?: string; purchase_date: string; source_document_type: string; price_tax_mode?: "INCLUSIVE" | "EXCLUSIVE"; header_subtotal?: string | number;
   header_tax_amount?: string | number; header_total?: string | number; notes?: string; record_status: string;
   item_count: number; total_amount: string | number; items: PurchaseItem[];
 };

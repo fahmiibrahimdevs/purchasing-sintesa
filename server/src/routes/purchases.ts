@@ -10,6 +10,8 @@ router.use("*", sessionAuth);
 
 const sourceTypes = new Set(["RECEIPT", "INVOICE", "PROFORMA_INVOICE", "OTHER"]);
 const requirements = new Set(["REQUIRED", "NOT_REQUIRED"]);
+const priceTaxModes = new Set(["INCLUSIVE", "EXCLUSIVE"]);
+const purchasePpnRate = 0.11;
 const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 const decimalValue = (value: unknown, label: string, { nullable = false, positive = false } = {}) => {
   if ((value === null || value === undefined || value === "") && nullable) return null;
@@ -144,7 +146,7 @@ export async function itemsForDocuments(documentIds: string[], includeInvoiceAtt
   }));
 }
 
-function normalizeItem(item: any, index: number) {
+function normalizeItem(item: any, index: number, priceTaxMode: string) {
   if (!String(item.item_name || "").trim()) throw new Error(`Nama barang baris ${index + 1} wajib diisi.`);
   if (!String(item.uom || "").trim()) throw new Error(`Satuan baris ${index + 1} wajib diisi.`);
   const requirement = String(item.invoice_requirement || "REQUIRED").toUpperCase();
@@ -153,16 +155,22 @@ function normalizeItem(item: any, index: number) {
   const qty = Number(rawQuantity).toFixed(4);
   if (Number(qty) <= 0) throw new Error(`Kuantitas baris ${index + 1} tidak valid.`);
   const rawPrice = decimalValue(item.unit_price, `Harga satuan baris ${index + 1}`);
-  const price = roundMoney(Number(rawPrice)).toFixed(2);
-  const subtotal = roundMoney(Number(qty) * Number(price)).toFixed(2);
-  const rawTax = decimalValue(item.purchase_tax_amount ?? 0, `PPN baris ${index + 1}`);
-  const tax = roundMoney(Number(rawTax)).toFixed(2);
-  const total = roundMoney(Number(subtotal) + Number(tax)).toFixed(2);
+  const enteredPrice = roundMoney(Number(rawPrice));
+  const isTaxable = requirement === "REQUIRED";
+  const netUnitPrice = isTaxable && priceTaxMode === "INCLUSIVE" ? enteredPrice / (1 + purchasePpnRate) : enteredPrice;
+  const subtotalAmount = roundMoney(Number(qty) * netUnitPrice);
+  const totalAmount = !isTaxable || priceTaxMode === "INCLUSIVE"
+    ? roundMoney(Number(qty) * enteredPrice)
+    : roundMoney(subtotalAmount * (1 + purchasePpnRate));
+  const price = netUnitPrice.toFixed(2);
+  const subtotal = subtotalAmount.toFixed(2);
+  const tax = (isTaxable ? roundMoney(totalAmount - subtotalAmount) : 0).toFixed(2);
+  const total = totalAmount.toFixed(2);
   return {
     id: newId(), item_code: "", item_sequence: index + 1,
     project_id: item.project_id || null, item_name: String(item.item_name).trim(),
     item_description: item.item_description || null, quantity: qty, uom: String(item.uom).trim(),
-    unit_price: price, purchase_subtotal: subtotal,
+    unit_price: price, unit_price_entered: enteredPrice.toFixed(2), purchase_subtotal: subtotal,
     purchase_tax_amount: tax, purchase_total: total,
     invoice_requirement: requirement,
     item_notes: item.item_notes || null,
@@ -181,10 +189,10 @@ async function insertItems(conn: any, documentId: string, groupCode: string, ite
     await conn.execute(
       `INSERT INTO purchase_items
        (id, purchase_document_id, item_code, item_sequence, project_id, item_name, item_description, quantity, uom,
-        unit_price, purchase_subtotal, purchase_tax_amount, purchase_total, invoice_requirement, item_notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        unit_price, unit_price_entered, purchase_subtotal, purchase_tax_amount, purchase_total, invoice_requirement, item_notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [item.id, documentId, item.item_code, item.item_sequence, item.project_id, item.item_name, item.item_description,
-        item.quantity, item.uom, item.unit_price, item.purchase_subtotal, item.purchase_tax_amount,
+        item.quantity, item.uom, item.unit_price, item.unit_price_entered, item.purchase_subtotal, item.purchase_tax_amount,
         item.purchase_total, item.invoice_requirement, item.item_notes]
     );
   }
@@ -234,19 +242,21 @@ router.post("/purchase-documents", allowRoles("PURCHASING", "ADMIN"), async (c) 
   }
   const sourceType = String(body.source_document_type || "OTHER").toUpperCase();
   if (!sourceTypes.has(sourceType)) return c.json({ error: "Jenis dokumen tidak valid." }, 400);
+  const priceTaxMode = String(body.price_tax_mode || "EXCLUSIVE").toUpperCase();
+  if (!priceTaxModes.has(priceTaxMode)) return c.json({ error: "Mode harga tidak valid." }, 400);
   let items: any[];
-  try { items = body.items.map(normalizeItem); } catch (error: any) { return c.json({ error: error.message }, 400); }
+  try { items = body.items.map((item: any, index: number) => normalizeItem(item, index, priceTaxMode)); } catch (error: any) { return c.json({ error: error.message }, 400); }
   const totals = documentTotals(items);
   const id = newId();
   const groupCode = `PUR-${String(body.purchase_date).slice(0, 4)}-${id.replace(/-/g, "").slice(0, 8).toUpperCase()}`;
   await withTransaction(async (conn) => {
     await conn.execute(
       `INSERT INTO purchase_documents
-       (id, purchase_group_code, supplier_id, supplier_document_no, purchase_date, source_document_type, document_currency,
+       (id, purchase_group_code, supplier_id, supplier_document_no, purchase_date, source_document_type, price_tax_mode, document_currency,
         header_subtotal, header_tax_amount, header_total, notes, record_status, created_by, posted_by, posted_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'POSTED', ?, ?, NOW())` ,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'POSTED', ?, ?, NOW())` ,
       [id, groupCode, body.supplier_id, body.supplier_document_no || null, body.purchase_date, sourceType,
-        body.document_currency || "IDR", totals.subtotal, totals.tax,
+        priceTaxMode, body.document_currency || "IDR", totals.subtotal, totals.tax,
         totals.total, body.notes || null, c.get("user").id, c.get("user").id]
     );
     await insertItems(conn, id, groupCode, items);
@@ -263,14 +273,18 @@ router.put("/purchase-documents/:id", allowRoles("PURCHASING", "ADMIN"), async (
   }
   const requestedSourceType = body.source_document_type ? String(body.source_document_type).toUpperCase() : null;
   if (requestedSourceType && !sourceTypes.has(requestedSourceType)) return c.json({ error: "Jenis dokumen tidak valid." }, 400);
+  const requestedPriceTaxMode = body.price_tax_mode === undefined ? null : String(body.price_tax_mode).toUpperCase();
+  if (requestedPriceTaxMode && !priceTaxModes.has(requestedPriceTaxMode)) return c.json({ error: "Mode harga tidak valid." }, 400);
   let items: any[];
-  try { items = body.items.map(normalizeItem); } catch (error: any) { return c.json({ error: error.message }, 400); }
-  const totals = documentTotals(items);
+  let priceTaxMode = requestedPriceTaxMode || "EXCLUSIVE";
 
   const outcome = await withTransaction(async (conn) => {
     const [documents] = await conn.execute("SELECT * FROM purchase_documents WHERE id=? FOR UPDATE", [id]);
     const before = (documents as any[])[0];
     if (!before) return { status: "missing" as const };
+    priceTaxMode = requestedPriceTaxMode || before.price_tax_mode || "EXCLUSIVE";
+    try { items = body.items.map((item: any, index: number) => normalizeItem(item, index, priceTaxMode)); } catch (error: any) { return { status: "invalid" as const, message: error.message }; }
+    const totals = documentTotals(items);
     const sourceType = requestedSourceType || before.source_document_type || "OTHER";
     if (before.record_status === "CANCELLED") return { status: "cancelled" as const };
     const [allocationRows] = await conn.execute(
@@ -281,23 +295,24 @@ router.put("/purchase-documents/:id", allowRoles("PURCHASING", "ADMIN"), async (
     const [oldItemRows] = await conn.execute("SELECT * FROM purchase_items WHERE purchase_document_id=? ORDER BY item_sequence", [id]);
     const oldItems = (oldItemRows as any[]).map(({ id: itemId, created_at, updated_at, ...row }) => row);
     await conn.execute(
-      `UPDATE purchase_documents SET supplier_id=?, supplier_document_no=?, purchase_date=?, source_document_type=?, document_currency=?,
+      `UPDATE purchase_documents SET supplier_id=?, supplier_document_no=?, purchase_date=?, source_document_type=?, price_tax_mode=?, document_currency=?,
        header_subtotal=?, header_tax_amount=?, header_total=?, notes=?, record_status='POSTED', posted_by=COALESCE(posted_by, ?), posted_at=COALESCE(posted_at, NOW()) WHERE id=? AND record_status<>'CANCELLED'`,
-      [body.supplier_id, body.supplier_document_no || null, body.purchase_date, sourceType, body.document_currency || "IDR",
+      [body.supplier_id, body.supplier_document_no || null, body.purchase_date, sourceType, priceTaxMode, body.document_currency || "IDR",
         totals.subtotal, totals.tax, totals.total, body.notes || null, c.get("user").id, id]
     );
     await conn.execute("DELETE FROM purchase_items WHERE purchase_document_id=?", [id]);
     await insertItems(conn, id, before.purchase_group_code, items);
     await writeAudit({
       userId: c.get("user").id, action: "UPDATE", entityType: "PURCHASE_DOCUMENT", entityId: id,
-      oldValues: { supplier_id: before.supplier_id, supplier_document_no: before.supplier_document_no, purchase_date: before.purchase_date, source_document_type: before.source_document_type, header_subtotal: before.header_subtotal, header_tax_amount: before.header_tax_amount, header_total: before.header_total, notes: before.notes, items: oldItems },
-      newValues: { supplier_id: body.supplier_id, supplier_document_no: body.supplier_document_no || null, purchase_date: body.purchase_date, source_document_type: sourceType, header_subtotal: totals.subtotal, header_tax_amount: totals.tax, header_total: totals.total, notes: body.notes || null, items },
+      oldValues: { supplier_id: before.supplier_id, supplier_document_no: before.supplier_document_no, purchase_date: before.purchase_date, source_document_type: before.source_document_type, price_tax_mode: before.price_tax_mode || "EXCLUSIVE", header_subtotal: before.header_subtotal, header_tax_amount: before.header_tax_amount, header_total: before.header_total, notes: before.notes, items: oldItems },
+      newValues: { supplier_id: body.supplier_id, supplier_document_no: body.supplier_document_no || null, purchase_date: body.purchase_date, source_document_type: sourceType, price_tax_mode: priceTaxMode, header_subtotal: totals.subtotal, header_tax_amount: totals.tax, header_total: totals.total, notes: body.notes || null, items },
     }, conn);
     return { status: "updated" as const, id, purchase_group_code: before.purchase_group_code };
   });
   if (outcome.status === "missing") return c.json({ error: "Dokumen pembelian tidak ditemukan." }, 404);
   if (outcome.status === "cancelled") return c.json({ error: "Pembelian yang sudah dibatalkan tidak dapat diedit." }, 409);
   if (outcome.status === "allocated") return c.json({ error: "Pembelian tidak bisa diubah karena barangnya sudah terhubung dengan faktur pajak." }, 409);
+  if (outcome.status === "invalid") return c.json({ error: outcome.message }, 400);
   return c.json(outcome);
 });
 
