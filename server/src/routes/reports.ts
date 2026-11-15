@@ -139,9 +139,9 @@ router.get("/dashboard-purchase-analytics", async (c) => {
   const [rows] = await pool.execute(
     `SELECT MONTH(d.purchase_date) AS month_number,
        p.id AS project_id, COALESCE(p.name, 'Tanpa project') AS project_name,
-       SUM(CASE WHEN pi.invoice_requirement='REQUIRED' THEN COALESCE(pi.purchase_total, pi.purchase_subtotal + COALESCE(pi.purchase_tax_amount, 0)) ELSE 0 END) AS invoice_total,
-       SUM(CASE WHEN pi.invoice_requirement='NOT_REQUIRED' THEN COALESCE(pi.purchase_total, pi.purchase_subtotal + COALESCE(pi.purchase_tax_amount, 0)) ELSE 0 END) AS non_invoice_total,
-       SUM(CASE WHEN pi.invoice_requirement NOT IN ('REQUIRED', 'NOT_REQUIRED') OR pi.invoice_requirement IS NULL THEN COALESCE(pi.purchase_total, pi.purchase_subtotal + COALESCE(pi.purchase_tax_amount, 0)) ELSE 0 END) AS unclassified_total,
+       SUM(CASE WHEN pi.invoice_requirement='REQUIRED' THEN COALESCE(pi.purchase_subtotal, COALESCE(pi.purchase_total, 0) - COALESCE(pi.purchase_tax_amount, 0)) ELSE 0 END) AS invoice_dpp_total,
+       SUM(CASE WHEN pi.invoice_requirement='NOT_REQUIRED' THEN COALESCE(pi.purchase_subtotal, COALESCE(pi.purchase_total, 0) - COALESCE(pi.purchase_tax_amount, 0)) ELSE 0 END) AS non_invoice_dpp_total,
+       SUM(CASE WHEN pi.invoice_requirement NOT IN ('REQUIRED', 'NOT_REQUIRED') OR pi.invoice_requirement IS NULL THEN COALESCE(pi.purchase_subtotal, COALESCE(pi.purchase_total, 0) - COALESCE(pi.purchase_tax_amount, 0)) ELSE 0 END) AS unclassified_dpp_total,
        SUM(COALESCE(pi.purchase_tax_amount, 0)) AS ppn_total,
        SUM(COALESCE(pi.purchase_total, pi.purchase_subtotal + COALESCE(pi.purchase_tax_amount, 0))) AS purchase_total
      FROM purchase_items pi
@@ -158,9 +158,9 @@ router.get("/dashboard-purchase-analytics", async (c) => {
   );
   const monthly = Array.from({ length: 12 }, (_, index) => ({
     month: index + 1,
-    invoice_total: 0,
-    non_invoice_total: 0,
-    unclassified_total: 0,
+    invoice_dpp_total: 0,
+    non_invoice_dpp_total: 0,
+    unclassified_dpp_total: 0,
     ppn_total: 0,
     purchase_total: 0,
   }));
@@ -181,14 +181,14 @@ router.get("/dashboard-purchase-analytics", async (c) => {
   for (const row of rows as any[]) {
     const monthIndex = Number(row.month_number) - 1;
     if (monthIndex < 0 || monthIndex > 11) continue;
-    const invoiceTotal = Number(row.invoice_total || 0);
-    const nonInvoiceTotal = Number(row.non_invoice_total || 0);
-    const unclassifiedTotal = Number(row.unclassified_total || 0);
+    const invoiceDppTotal = Number(row.invoice_dpp_total || 0);
+    const nonInvoiceDppTotal = Number(row.non_invoice_dpp_total || 0);
+    const unclassifiedDppTotal = Number(row.unclassified_dpp_total || 0);
     const ppnTotal = Number(row.ppn_total || 0);
     const purchaseTotal = Number(row.purchase_total || 0);
-    monthly[monthIndex].invoice_total += invoiceTotal;
-    monthly[monthIndex].non_invoice_total += nonInvoiceTotal;
-    monthly[monthIndex].unclassified_total += unclassifiedTotal;
+    monthly[monthIndex].invoice_dpp_total += invoiceDppTotal;
+    monthly[monthIndex].non_invoice_dpp_total += nonInvoiceDppTotal;
+    monthly[monthIndex].unclassified_dpp_total += unclassifiedDppTotal;
     monthly[monthIndex].ppn_total += ppnTotal;
     monthly[monthIndex].purchase_total += purchaseTotal;
 

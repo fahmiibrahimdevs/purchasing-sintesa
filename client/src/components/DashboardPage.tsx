@@ -6,10 +6,10 @@ import { Button, EmptyState, ErrorBanner, LoadingState, SectionHeading, SummaryC
 
 type Props = { user: User; onNavigate: (page: string) => void };
 type Summary = { purchase_documents_this_month: number; purchase_value_this_month: number };
-type MonthlyPurchase = { month: number; invoice_total: number; non_invoice_total: number; unclassified_total: number; ppn_total: number; purchase_total: number };
+type MonthlyPurchase = { month: number; invoice_dpp_total: number; non_invoice_dpp_total: number; unclassified_dpp_total: number; ppn_total: number; purchase_total: number };
 type ProjectPurchase = { project_id: string | null; project_name: string; monthly_totals: number[]; annual_total: number };
 type PurchaseAnalytics = { year: number; months: MonthlyPurchase[]; projects: ProjectPurchase[] };
-type MonthlyValueKey = "invoice_total" | "non_invoice_total" | "unclassified_total" | "ppn_total";
+type MonthlyValueKey = "invoice_dpp_total" | "non_invoice_dpp_total" | "unclassified_dpp_total" | "ppn_total";
 type ChartSeries = { key: MonthlyValueKey; label: string; color: string };
 type PieDatum = { label: string; value: number; color: string };
 
@@ -74,7 +74,7 @@ function CategoryPieCard({ data, year }: { data: PieDatum[]; year: number }) {
   return <section className="min-w-0 self-start overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-card">
     <div className="border-b border-slate-100 px-4 py-3">
       <h3 className="text-base font-semibold text-slate-900">Komposisi pembelian</h3>
-      <p className="mt-0.5 text-sm text-slate-500">Faktur dan non faktur; PPN dirinci terpisah.</p>
+      <p className="mt-0.5 text-sm text-slate-500">Faktur sebelum PPN + non faktur + PPN.</p>
     </div>
     <div className="flex flex-col items-center gap-3 p-4">
       <div role="img" aria-label={`Perbandingan kategori tahun ${year}`} className="relative h-40 w-40 shrink-0 rounded-full" style={{ background: donutBackground }}>
@@ -161,47 +161,48 @@ export function DashboardPage({ user, onNavigate }: Props) {
   const months = analytics?.months || [];
   const currentMonth = months[currentMonthIndex];
   const projects = analytics?.projects || [];
-  const hasUnclassified = months.some((month) => month.unclassified_total > 0);
+  const hasUnclassified = months.some((month) => month.unclassified_dpp_total > 0);
   const totals = months.reduce((acc, month) => ({
-    invoice_total: acc.invoice_total + month.invoice_total,
-    non_invoice_total: acc.non_invoice_total + month.non_invoice_total,
-    unclassified_total: acc.unclassified_total + month.unclassified_total,
+    invoice_dpp_total: acc.invoice_dpp_total + month.invoice_dpp_total,
+    non_invoice_dpp_total: acc.non_invoice_dpp_total + month.non_invoice_dpp_total,
+    unclassified_dpp_total: acc.unclassified_dpp_total + month.unclassified_dpp_total,
     ppn_total: acc.ppn_total + month.ppn_total,
     purchase_total: acc.purchase_total + month.purchase_total,
-  }), { invoice_total: 0, non_invoice_total: 0, unclassified_total: 0, ppn_total: 0, purchase_total: 0 });
+  }), { invoice_dpp_total: 0, non_invoice_dpp_total: 0, unclassified_dpp_total: 0, ppn_total: 0, purchase_total: 0 });
   const monthlySeries: ChartSeries[] = [
-    { key: "invoice_total", label: "Faktur", color: "#2563eb" },
-    { key: "non_invoice_total", label: "Non Faktur", color: "#059669" },
-    ...(hasUnclassified ? [{ key: "unclassified_total" as const, label: "Belum ditetapkan", color: "#94a3b8" }] : []),
+    { key: "invoice_dpp_total", label: "Faktur sebelum PPN", color: "#2563eb" },
+    { key: "non_invoice_dpp_total", label: "Non Faktur", color: "#059669" },
+    ...(hasUnclassified ? [{ key: "unclassified_dpp_total" as const, label: "Belum ditetapkan", color: "#94a3b8" }] : []),
   ];
   const summaryCardsLoading = isLoading || analyticsLoading;
   const cards = [
     { label: "Pembelian bulan ini", value: analytics ? money(currentMonth?.purchase_total ?? 0) : "—", icon: ShoppingBag, tone: "blue" as const, detail: summary ? `${summary.purchase_documents_this_month} dokumen` : "Total transaksi" , loading: summaryCardsLoading },
-    { label: "Pembelian faktur bulan ini", value: analytics ? money(currentMonth?.invoice_total ?? 0) : "—", icon: FileCheck2, tone: "emerald" as const, detail: "Termasuk PPN", loading: summaryCardsLoading },
-    { label: "Pembelian non faktur bulan ini", value: analytics ? money(currentMonth?.non_invoice_total ?? 0) : "—", icon: ClipboardList, tone: "orange" as const, detail: "Tanpa faktur pajak", loading: summaryCardsLoading },
-    { label: "PPN bulan ini", value: analytics ? money(currentMonth?.ppn_total ?? 0) : "—", icon: TrendingUp, tone: "violet" as const, detail: "Rincian dari pembelian faktur", loading: summaryCardsLoading },
+    { label: "Pembelian faktur bulan ini", value: analytics ? money(currentMonth?.invoice_dpp_total ?? 0) : "—", icon: FileCheck2, tone: "emerald" as const, detail: "Sebelum PPN (DPP)", loading: summaryCardsLoading },
+    { label: "Pembelian non faktur bulan ini", value: analytics ? money(currentMonth?.non_invoice_dpp_total ?? 0) : "—", icon: ClipboardList, tone: "orange" as const, detail: "Tanpa faktur pajak", loading: summaryCardsLoading },
+    { label: "PPN bulan ini", value: analytics ? money(currentMonth?.ppn_total ?? 0) : "—", icon: TrendingUp, tone: "violet" as const, detail: "PPN pembelian faktur", loading: summaryCardsLoading },
   ];
 
   return <div><SectionHeading title={`Selamat datang, ${user.name.split(" ")[0]}`} description="Ringkasan operasional pembelian dan faktur untuk periode berjalan." action={user.role === "PURCHASING" || user.role === "ADMIN" ? <Button onClick={() => onNavigate("purchases")}><ShoppingBag size={16} />Buka Pembelian</Button> : <Button onClick={() => onNavigate("invoices")}><ReceiptText size={16} />Buka Faktur Pajak</Button>} />
     <SummaryCards cards={cards} />
 
     <section className="mb-5 space-y-4">
-      <div><h2 className="text-lg font-semibold text-slate-900">Rekap pembelian bulanan</h2><p className="mt-1 text-sm text-slate-600">Tahun {analytics?.year ?? currentYear} · Nilai pembelian sudah termasuk PPN.</p></div>
+      <div><h2 className="text-lg font-semibold text-slate-900">Rekap pembelian bulanan</h2><p className="mt-1 text-sm text-slate-600">Tahun {analytics?.year ?? currentYear} · Faktur dihitung sebelum PPN; PPN dirinci terpisah.</p></div>
       <ErrorBanner message={analyticsError instanceof Error ? analyticsError.message : null} />
       {analyticsLoading ? <div className="rounded-2xl border border-slate-200 bg-white"><LoadingState label="Menghitung rekap bulanan dan project…" /></div> : analytics && <>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <MonthlyAmountCard title="Pembelian Faktur" amounts={months.map((month) => month.invoice_total)} total={totals.invoice_total} />
-          <MonthlyAmountCard title="Pembelian Non Faktur" amounts={months.map((month) => month.non_invoice_total)} total={totals.non_invoice_total} />
+          <MonthlyAmountCard title="Pembelian Faktur (sebelum PPN)" amounts={months.map((month) => month.invoice_dpp_total)} total={totals.invoice_dpp_total} />
+          <MonthlyAmountCard title="Pembelian Non Faktur" amounts={months.map((month) => month.non_invoice_dpp_total)} total={totals.non_invoice_dpp_total} />
           <MonthlyAmountCard title="PPN" amounts={months.map((month) => month.ppn_total)} total={totals.ppn_total} />
           <CategoryPieCard year={analytics?.year ?? currentYear} data={[
-            { label: "Pembelian Faktur", value: totals.invoice_total, color: "#2563eb" },
-            { label: "Pembelian Non Faktur", value: totals.non_invoice_total, color: "#059669" },
-            ...(totals.unclassified_total > 0 ? [{ label: "Belum dikategorikan", value: totals.unclassified_total, color: "#94a3b8" }] : []),
+            { label: "Faktur sebelum PPN", value: totals.invoice_dpp_total, color: "#2563eb" },
+            { label: "Pembelian Non Faktur", value: totals.non_invoice_dpp_total, color: "#059669" },
+            ...(totals.unclassified_dpp_total > 0 ? [{ label: "Belum dikategorikan (DPP)", value: totals.unclassified_dpp_total, color: "#94a3b8" }] : []),
+            { label: "PPN", value: totals.ppn_total, color: "#7c3aed" },
           ]} />
         </div>
 
         <div className="grid gap-4 xl:grid-cols-2">
-          <MonthlyBarChart title="Faktur vs Non Faktur" description="Nominal pembelian per bulan." months={months} series={monthlySeries} />
+          <MonthlyBarChart title="Faktur vs Non Faktur" description="Nilai sebelum PPN (DPP) per bulan." months={months} series={monthlySeries} />
           <MonthlyBarChart title="PPN per bulan" description="PPN yang tercatat pada transaksi pembelian." months={months} series={[{ key: "ppn_total", label: "PPN", color: "#7c3aed" }]} />
         </div>
 
