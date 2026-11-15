@@ -116,7 +116,7 @@ router.post("/", async (c) => {
       );
       if (ownerType === "TAX_INVOICE" && supersedesAttachmentId && previousLifecycleStatus === "VERIFIED") {
         const lifecycleStatus = previousLifecycleStatus;
-        await conn.execute("UPDATE tax_invoices SET lifecycle_status='UNDER_REVIEW', verified_by=NULL, verified_at=NULL WHERE id=?", [ownerId]);
+        await conn.execute("UPDATE tax_invoices SET lifecycle_status='UNDER_REVIEW' WHERE id=?", [ownerId]);
         await writeAudit({ userId: c.get("user").id, action: "UPDATE", entityType: "TAX_INVOICE", entityId: ownerId, oldValues: { lifecycle_status: lifecycleStatus }, newValues: { lifecycle_status: "UNDER_REVIEW" }, reason: "Versi file baru diunggah; faktur dikembalikan ke antrean review." }, conn);
       }
       if (ownerType === "TAX_INVOICE") {

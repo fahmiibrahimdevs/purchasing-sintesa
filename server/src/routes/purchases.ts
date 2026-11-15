@@ -204,30 +204,47 @@ router.get("/purchase-documents", async (c) => {
   const offset = (page - 1) * pageSize;
   const supplierId = c.req.query("supplierId");
   const projectId = c.req.query("projectId");
+  const requestedInvoiceRequirement = c.req.query("invoiceRequirement");
+  const invoiceRequirement = requirements.has(requestedInvoiceRequirement || "") ? requestedInvoiceRequirement : "";
   const from = c.req.query("from");
   const to = c.req.query("to");
   const q = c.req.query("q");
   const clauses: string[] = ["d.record_status <> 'CANCELLED'"];
   const params: any[] = [];
+  const itemFilterClauses: string[] = [];
+  const itemFilterParams: string[] = [];
   if (supplierId) { clauses.push("d.supplier_id=?"); params.push(supplierId); }
   if (from) { clauses.push("d.purchase_date>=?"); params.push(from); }
   if (to) { clauses.push("d.purchase_date<=?"); params.push(to); }
-  if (projectId) { clauses.push("EXISTS (SELECT 1 FROM purchase_items fpi WHERE fpi.purchase_document_id=d.id AND fpi.project_id=?)"); params.push(projectId); }
+  if (projectId === "none") itemFilterClauses.push("%alias%.project_id IS NULL");
+  else if (projectId) { itemFilterClauses.push("%alias%.project_id=?"); itemFilterParams.push(projectId); }
+  if (invoiceRequirement) { itemFilterClauses.push("%alias%.invoice_requirement=?"); itemFilterParams.push(invoiceRequirement); }
+  if (itemFilterClauses.length) {
+    const existsFilter = itemFilterClauses.map((clause) => clause.replaceAll("%alias%", "fpi")).join(" AND ");
+    clauses.push(`EXISTS (SELECT 1 FROM purchase_items fpi WHERE fpi.purchase_document_id=d.id AND ${existsFilter})`);
+    params.push(...itemFilterParams);
+  }
   if (q) { clauses.push("(d.purchase_group_code LIKE ? OR d.supplier_document_no LIKE ? OR s.name LIKE ? OR EXISTS (SELECT 1 FROM purchase_items qpi WHERE qpi.purchase_document_id=d.id AND qpi.item_name LIKE ?))"); params.push(...Array(4).fill(`%${q}%`)); }
   const where = clauses.join(" AND ");
   const [countRows] = await pool.execute(`SELECT COUNT(*) AS total FROM purchase_documents d JOIN suppliers s ON s.id=d.supplier_id WHERE ${where}`, params);
   const total = Number((countRows as any[])[0]?.total || 0);
+  const joinItemFilter = itemFilterClauses.length
+    ? ` AND ${itemFilterClauses.map((clause) => clause.replaceAll("%alias%", "pi")).join(" AND ")}`
+    : "";
   const [documents] = await pool.execute(
     `SELECT d.*, s.name AS supplier_name, s.supplier_code,
        COUNT(DISTINCT pi.id) AS item_count, COALESCE(SUM(COALESCE(pi.purchase_total, pi.purchase_subtotal)), 0) AS total_amount
-     FROM purchase_documents d JOIN suppliers s ON s.id=d.supplier_id LEFT JOIN purchase_items pi ON pi.purchase_document_id=d.id
+     FROM purchase_documents d JOIN suppliers s ON s.id=d.supplier_id LEFT JOIN purchase_items pi ON pi.purchase_document_id=d.id${joinItemFilter}
      WHERE ${where} GROUP BY d.id ORDER BY d.purchase_date DESC, d.created_at DESC LIMIT ? OFFSET ?`,
-    [...params, pageSize, offset]
+    [...itemFilterParams, ...params, pageSize, offset]
   );
   const docs = documents as any[];
   const items = await itemsForDocuments(docs.map((doc) => doc.id), ["TAX_STAFF", "ADMIN"].includes(c.get("user").role));
   const byDocument = new Map<string, any[]>();
   for (const item of items) {
+    if (projectId === "none" && item.project_id != null) continue;
+    if (projectId && projectId !== "none" && item.project_id !== projectId) continue;
+    if (invoiceRequirement && item.invoice_requirement !== invoiceRequirement) continue;
     const list = byDocument.get(item.purchase_document_id) || [];
     list.push(item);
     byDocument.set(item.purchase_document_id, list);

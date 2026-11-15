@@ -51,12 +51,12 @@ async function latestInvoiceVersionIsCancelled(invoiceId: string) {
 
 async function getInvoice(id: string) {
   const [rows] = await pool.execute(
-    `SELECT ti.*, s.name AS supplier_name, s.supplier_code, u.name AS created_by_name, vu.name AS verified_by_name,
+    `SELECT ti.*, s.name AS supplier_name, s.supplier_code, u.name AS created_by_name,
        (SELECT r.id FROM tax_invoices r WHERE r.replaces_tax_invoice_id=ti.id AND r.lifecycle_status<>'CANCELLED' ORDER BY r.created_at DESC LIMIT 1) AS replacement_invoice_id,
        (SELECT r.nsfp FROM tax_invoices r WHERE r.replaces_tax_invoice_id=ti.id AND r.lifecycle_status<>'CANCELLED' ORDER BY r.created_at DESC LIMIT 1) AS replacement_nsfp,
        (SELECT r.lifecycle_status FROM tax_invoices r WHERE r.replaces_tax_invoice_id=ti.id AND r.lifecycle_status<>'CANCELLED' ORDER BY r.created_at DESC LIMIT 1) AS replacement_lifecycle_status
      FROM tax_invoices ti JOIN suppliers s ON s.id=ti.supplier_id
-     JOIN users u ON u.id=ti.created_by LEFT JOIN users vu ON vu.id=ti.verified_by WHERE ti.id=?`, [id]
+     JOIN users u ON u.id=ti.created_by WHERE ti.id=?`, [id]
   );
   const invoice = (rows as any[])[0];
   if (!invoice) return null;
@@ -535,7 +535,7 @@ router.post("/tax-invoices/:id/verify", roles, async (c) => {
         await recordEvent(conn, { invoiceId: invoice.replaces_tax_invoice_id, eventType: "REPLACED", actorId: c.get("user").id, oldValues: { lifecycle_status: old.lifecycle_status }, newValues: { lifecycle_status: "REPLACED" }, relatedInvoiceId: id, reason: body.reason || null });
       }
     }
-    await conn.execute("UPDATE tax_invoices SET lifecycle_status='VERIFIED', verified_by=?, verified_at=NOW() WHERE id=?", [c.get("user").id, id]);
+    await conn.execute("UPDATE tax_invoices SET lifecycle_status='VERIFIED' WHERE id=?", [id]);
     await recordEvent(conn, { invoiceId: id, eventType: "VERIFIED", actorId: c.get("user").id, oldValues: { lifecycle_status: invoice.lifecycle_status }, newValues: { lifecycle_status: "VERIFIED" }, reason: body.reason || null });
     await writeAudit({ userId: c.get("user").id, action: "VERIFY", entityType: "TAX_INVOICE", entityId: id, oldValues: { lifecycle_status: invoice.lifecycle_status }, newValues: { lifecycle_status: "VERIFIED" }, reason: body.reason || null }, conn);
   });
@@ -611,7 +611,7 @@ router.post("/tax-invoices/:id/attachments/:attachmentId/cancel", roles, async (
       const versionNumber = Number((countRows as any[])[0]?.version_count || 1);
       const nextLifecycleStatus = invoice.lifecycle_status === "VERIFIED" ? "UNDER_REVIEW" : invoice.lifecycle_status;
       if (nextLifecycleStatus !== invoice.lifecycle_status) {
-        await conn.execute("UPDATE tax_invoices SET lifecycle_status='UNDER_REVIEW', verified_by=NULL, verified_at=NULL WHERE id=?", [invoiceId]);
+        await conn.execute("UPDATE tax_invoices SET lifecycle_status='UNDER_REVIEW' WHERE id=?", [invoiceId]);
       }
       await recordEvent(conn, {
         invoiceId,

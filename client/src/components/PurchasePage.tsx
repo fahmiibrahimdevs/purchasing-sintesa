@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Banknote, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, CircleAlert, Download, Eye, FileUp, LoaderCircle, Pencil, Plus, ReceiptText, Search, ShoppingBag, Table2, Rows3, Trash2 } from "lucide-react";
+import { ArrowLeft, Banknote, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, CircleAlert, Download, Eye, FileUp, LoaderCircle, Pencil, Plus, ReceiptText, RotateCcw, Search, ShoppingBag, Table2, Rows3, Trash2 } from "lucide-react";
 import { api, dateText, dateTimeText, downloadFile, jsonBody, money, quantityText } from "../lib/api";
 import { useDebouncedValue } from "../lib/hooks";
 import { InvoiceAttachment, PageResult, Project, PurchaseDocument, PurchaseItem, Supplier, User } from "../types";
@@ -120,6 +120,8 @@ export function PurchasePage({ user, notify }: Props) {
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search.trim());
   const [supplierId, setSupplierId] = useState("");
+  const [invoiceFilter, setInvoiceFilter] = useState<"" | "REQUIRED" | "NOT_REQUIRED">("");
+  const [projectFilter, setProjectFilter] = useState("");
   const [view, setView] = useState<"grouped" | "flat">("flat");
   const [openIds, setOpenIds] = useState<Set<string>>(new Set());
   const [editorRoute, setEditorRoute] = useState<PurchaseEditorRoute>(purchaseEditorFromHash);
@@ -128,8 +130,11 @@ export function PurchasePage({ user, notify }: Props) {
   const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
   if (debouncedSearch) params.set("q", debouncedSearch);
   if (supplierId) params.set("supplierId", supplierId);
-  const { data, isLoading, error } = useQuery({ queryKey: ["purchases", page, pageSize, debouncedSearch, supplierId], queryFn: () => api<PageResult<PurchaseDocument>>(`/api/purchase-documents?${params}`) });
+  if (invoiceFilter) params.set("invoiceRequirement", invoiceFilter);
+  if (projectFilter) params.set("projectId", projectFilter);
+  const { data, isLoading, error } = useQuery({ queryKey: ["purchases", page, pageSize, debouncedSearch, supplierId, invoiceFilter, projectFilter], queryFn: () => api<PageResult<PurchaseDocument>>(`/api/purchase-documents?${params}`) });
   const { data: suppliers = [] } = useQuery({ queryKey: ["suppliers"], queryFn: () => api<Supplier[]>("/api/suppliers") });
+  const { data: projects = [] } = useQuery({ queryKey: ["projects"], queryFn: () => api<Project[]>("/api/projects") });
   const editorId = editorRoute?.mode === "edit" ? editorRoute.id : "";
   const { data: editorDocument, isLoading: editorLoading, error: editorError } = useQuery({ queryKey: ["purchase-detail", editorId], queryFn: () => api<PurchaseDocument>(`/api/purchase-documents/${encodeURIComponent(editorId)}`), enabled: Boolean(editorId) });
   const canCreate = user.role === "PURCHASING" || user.role === "ADMIN";
@@ -161,6 +166,7 @@ export function PurchasePage({ user, notify }: Props) {
   const visiblePageCount = Math.min(5, totalPages);
   const firstVisiblePage = Math.min(Math.max(1, page - 2), Math.max(1, totalPages - visiblePageCount + 1));
   const visiblePages = Array.from({ length: visiblePageCount }, (_, index) => firstVisiblePage + index);
+  const hasActiveFilters = Boolean(search.trim() || supplierId || invoiceFilter || projectFilter);
   const toggle = (id: string) => setOpenIds((previous) => { const next = new Set(previous); next.has(id) ? next.delete(id) : next.add(id); return next; });
   const cards = [
     { label: "Pembelian bulan ini", value: summary?.purchase_documents_this_month ?? 0, unit: "dokumen", detail: "Jumlah transaksi yang dicatat bulan ini", loading: summaryLoading, icon: ShoppingBag, tone: "blue" as const },
@@ -179,7 +185,7 @@ export function PurchasePage({ user, notify }: Props) {
   return <div>
     <SectionHeading title="Kelola Pembelian" description="Catat transaksi pemasok, pantau kelengkapan faktur, dan telusuri barang dalam setiap pembelian." action={canCreate && <Button onClick={() => openEditor({ mode: "new" })}><Plus size={16} />Tambah Pembelian</Button>} />
     <SummaryCards cards={cards} columns={4} />
-    <section className="mb-4 rounded-2xl border border-slate-200 bg-white p-2 shadow-card">
+    <section className="mb-4 space-y-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-card">
       <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
         <div className="relative min-w-[220px] flex-1"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} /><input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} className={`${inputClass} pl-9`} placeholder="Cari kode, supplier, dokumen, barang…" /></div>
         <SearchableSelect className={`${inputClass} lg:w-[220px]`} value={supplierId} placeholder="Semua supplier" searchPlaceholder="Cari supplier…" options={suppliers.map((s) => ({ value: s.id, label: s.name, sublabel: s.supplier_code }))} onChange={(value) => { setSupplierId(value); setPage(1); }} />
@@ -187,6 +193,18 @@ export function PurchasePage({ user, notify }: Props) {
           <button type="button" onClick={() => setView("grouped")} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold ${view === "grouped" ? "bg-white text-blue-700 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}><Rows3 size={15} />Grouped</button>
           <button type="button" onClick={() => setView("flat")} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold ${view === "flat" ? "bg-white text-blue-700 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}><Table2 size={15} />Per barang</button>
         </div>
+      </div>
+      <div className="flex max-w-full items-center gap-2 overflow-x-auto border-t border-slate-100 pt-2 pb-0.5">
+        <span className="shrink-0 text-xs font-semibold text-slate-500">Filter Faktur</span>
+        <div role="group" aria-label="Filter jenis faktur" className="flex shrink-0 gap-1">
+          {([{ value: "", label: "Semua barang" }, { value: "REQUIRED", label: "Faktur" }, { value: "NOT_REQUIRED", label: "Non faktur" }] as const).map((tab) => <button key={tab.value || "all"} type="button" aria-pressed={invoiceFilter === tab.value} onClick={() => { setInvoiceFilter(tab.value); setPage(1); setOpenIds(new Set()); }} className={`shrink-0 rounded-lg px-3.5 py-2 text-sm font-semibold transition ${invoiceFilter === tab.value ? "bg-blue-700 text-white shadow-sm" : "text-blue-800 hover:bg-blue-50"}`}>{tab.label}</button>)}
+        </div>
+        <span aria-hidden="true" className="shrink-0 px-1 text-slate-300">|</span>
+        <span className="shrink-0 text-xs font-semibold text-slate-500">Filter Project</span>
+        <div role="group" aria-label="Filter project" className="flex shrink-0 gap-1">
+          {[{ value: "", label: "Semua project" }, ...projects.map((project) => ({ value: project.id, label: project.name })), { value: "none", label: "Tanpa project" }].map((tab) => <button key={tab.value || "all-projects"} type="button" aria-pressed={projectFilter === tab.value} onClick={() => { setProjectFilter(tab.value); setPage(1); setOpenIds(new Set()); }} className={`shrink-0 rounded-lg px-3.5 py-2 text-sm font-semibold transition ${projectFilter === tab.value ? "bg-blue-700 text-white shadow-sm" : "text-blue-800 hover:bg-blue-50"}`}>{tab.label}</button>)}
+        </div>
+        <button type="button" disabled={!hasActiveFilters} onClick={() => { setSearch(""); setSupplierId(""); setInvoiceFilter(""); setProjectFilter(""); setPage(1); setOpenIds(new Set()); }} className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"><RotateCcw size={14} />Reset semua filter</button>
       </div>
     </section>
     <ErrorBanner message={error instanceof Error ? error.message : null} />

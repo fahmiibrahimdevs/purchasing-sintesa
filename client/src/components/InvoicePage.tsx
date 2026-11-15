@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Clock3, Download, ExternalLink, FileClock, FileText, FileUp, Folder, FolderOpen, Pencil, Plus, RotateCcw, Search, Trash2, XCircle } from "lucide-react";
+import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, CircleAlert, Clock3, Download, ExternalLink, FileClock, FileText, FileUp, Folder, FolderOpen, Pencil, Plus, RotateCcw, Search, Trash2, XCircle } from "lucide-react";
 import { api, dateText, dateTimeText, downloadFile, jsonBody, money, monthText, quantityText } from "../lib/api";
 import { useDebouncedValue } from "../lib/hooks";
 import { confirmAction, showUndoToast } from "../lib/swal";
@@ -73,18 +73,41 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify }: Pr
     queryKey: ["invoice-items", debouncedSearch, supplierId, projectId],
     queryFn: () => api<PurchaseItem[]>(`/api/purchase-items/invoice-items?${params}`),
   });
+  const { data: allCoverageItems = [], isLoading: coverageLoading } = useQuery({
+    queryKey: ["invoice-items", "coverage-summary"],
+    queryFn: () => api<PurchaseItem[]>("/api/purchase-items/invoice-items"),
+  });
   const { data: suppliers = [] } = useQuery({ queryKey: ["suppliers"], queryFn: () => api<Supplier[]>("/api/suppliers") });
   const { data: projects = [] } = useQuery({ queryKey: ["projects"], queryFn: () => api<Project[]>("/api/projects") });
   const canWork = user.role === "TAX_STAFF" || user.role === "ADMIN";
-  const coverageCounts = useMemo(() => items.reduce((counts, item) => {
-    switch (item.coverage_status) {
-      case "COMPLETE": counts.complete += 1; break;
-      case "PARTIAL": counts.partial += 1; break;
-      case "UNDER_REVIEW": counts.reviewing += 1; break;
-      default: counts.unprocessed += 1; break;
+  const coverageCounts = useMemo(() => {
+    const purchaseGroups = new Map<string, Array<{ quantity: number; coveredQuantity: number }>>();
+    let itemsNeedingInvoice = 0;
+
+    for (const item of allCoverageItems) {
+      if (item.invoice_requirement !== "REQUIRED") continue;
+      const quantity = Math.max(0, Number(item.quantity) || 0);
+      const coveredQuantity = (item.invoice_links || [])
+        .filter((invoice) => !["CANCELLED", "REPLACED"].includes(invoice.lifecycle_status) && !invoice.file_replacement_pending)
+        .reduce((sum, invoice) => sum + Math.max(0, Number(invoice.allocated_quantity) || 0), 0);
+      if (coveredQuantity + 0.0001 < quantity) itemsNeedingInvoice += 1;
+
+      const groupKey = item.purchase_document_id || item.purchase_group_code || item.id;
+      const groupItems = purchaseGroups.get(groupKey) || [];
+      groupItems.push({ quantity, coveredQuantity });
+      purchaseGroups.set(groupKey, groupItems);
+    }
+
+    const counts = { itemsNeedingInvoice, completeNotes: 0, partialNotes: 0, uncoveredNotes: 0 };
+    for (const groupItems of purchaseGroups.values()) {
+      const isComplete = groupItems.every((item) => item.coveredQuantity + 0.0001 >= item.quantity);
+      const hasAnyCoverage = groupItems.some((item) => item.coveredQuantity > 0.0001);
+      if (isComplete) counts.completeNotes += 1;
+      else if (hasAnyCoverage) counts.partialNotes += 1;
+      else counts.uncoveredNotes += 1;
     }
     return counts;
-  }, { unprocessed: 0, reviewing: 0, partial: 0, complete: 0 }), [items]);
+  }, [allCoverageItems]);
   const tableGroups = useMemo(() => {
     const groups = new Map<string, InvoiceTableGroup>();
     const getGroup = (key: string, item: PurchaseItem, invoice?: InvoiceLink) => {
@@ -202,12 +225,12 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify }: Pr
     } catch (e: any) { notify(e.message, "error"); }
   }
   return <div>
-    <SectionHeading title="Faktur Pajak" description="Pantau progres barang wajib faktur: belum diproses, menunggu verifikasi, tercakup sebagian, atau lengkap." action={canWork ? <Button onClick={() => onCreateInvoice()}><Plus size={16} />Input Faktur</Button> : undefined} />
+    <SectionHeading title="Faktur Pajak" description="Pantau barang wajib faktur dan kelengkapan faktur pada setiap nota pembelian." action={canWork ? <Button onClick={() => onCreateInvoice()}><Plus size={16} />Input Faktur</Button> : undefined} />
     <SummaryCards cards={[
-      { label: "Belum diproses", value: coverageCounts.unprocessed, unit: "barang", detail: "Belum ada faktur yang diajukan atau masih berupa draft", icon: FileText, tone: "blue", loading: isLoading },
-      { label: "Menunggu verifikasi", value: coverageCounts.reviewing, unit: "barang", detail: "Faktur sudah diajukan dan menunggu pemeriksaan", icon: FileClock, tone: "violet", loading: isLoading },
-      { label: "Tercakup sebagian", value: coverageCounts.partial, unit: "barang", detail: "Sebagian kuantitas sudah diverifikasi", icon: Clock3, tone: "amber", loading: isLoading },
-      { label: "Tercakup lengkap", value: coverageCounts.complete, unit: "barang", detail: "Seluruh kuantitas sudah tercakup dan faktur terverifikasi", icon: CheckCircle2, tone: "emerald", loading: isLoading },
+      { label: "Barang perlu faktur", value: coverageCounts.itemsNeedingInvoice, unit: "barang", detail: "Barang wajib faktur yang masih belum tercakup", icon: FileText, tone: "blue", loading: coverageLoading },
+      { label: "Tercakup lengkap", value: coverageCounts.completeNotes, unit: "nota", detail: "Semua barang wajib faktur di nota sudah diinput", icon: CheckCircle2, tone: "emerald", loading: coverageLoading },
+      { label: "Tercakup sebagian", value: coverageCounts.partialNotes, unit: "nota", detail: "Sebagian sudah diinput, masih ada barang yang belum", icon: Clock3, tone: "amber", loading: coverageLoading },
+      { label: "Belum ada faktur", value: coverageCounts.uncoveredNotes, unit: "nota", detail: "Belum ada faktur yang ditautkan ke barang wajib faktur", icon: CircleAlert, tone: "violet", loading: coverageLoading },
     ]} />
     <div className="mb-4 grid gap-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-card sm:grid-cols-2 xl:grid-cols-[minmax(240px,1fr)_200px_200px_210px]">
       <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} /><input className={`${inputClass} pl-9`} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Cari kode, supplier, nota, project, barang…" /></div>

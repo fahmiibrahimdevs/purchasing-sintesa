@@ -129,7 +129,8 @@ router.get("/users", allowRoles("ADMIN"), async (c) => {
   const [rows] = await pool.query(`SELECT u.id, u.name, u.email, u.role, u.is_active, u.created_at,
     (SELECT COUNT(*) FROM purchase_documents pd WHERE pd.created_by=u.id OR pd.posted_by=u.id) AS purchase_count,
     (SELECT COUNT(*) FROM purchase_documents pd WHERE pd.created_by=u.id OR pd.posted_by=u.id)
-      + (SELECT COUNT(*) FROM tax_invoices ti WHERE ti.created_by=u.id OR ti.verified_by=u.id)
+      + (SELECT COUNT(*) FROM tax_invoices ti WHERE ti.created_by=u.id)
+      + (SELECT COUNT(*) FROM audit_logs al WHERE al.user_id=u.id AND al.action='ARCHIVE_VERIFICATION_METADATA' AND al.entity_type='TAX_INVOICE')
       + (SELECT COUNT(*) FROM follow_up_activities f WHERE f.created_by=u.id)
       + (SELECT COUNT(*) FROM tax_invoice_purchase_allocations a WHERE a.created_by=u.id)
       + (SELECT COUNT(*) FROM attachments att WHERE att.uploaded_by=u.id)
@@ -183,7 +184,8 @@ router.delete("/users/:id", allowRoles("ADMIN"), async (c) => {
       if (!account) return { status: 404, error: "Pengguna tidak ditemukan." } as const;
       const [usageRows] = await conn.execute(
         `SELECT (SELECT COUNT(*) FROM purchase_documents WHERE created_by=? OR posted_by=?)
-          + (SELECT COUNT(*) FROM tax_invoices WHERE created_by=? OR verified_by=?)
+          + (SELECT COUNT(*) FROM tax_invoices WHERE created_by=?)
+          + (SELECT COUNT(*) FROM audit_logs WHERE user_id=? AND action='ARCHIVE_VERIFICATION_METADATA' AND entity_type='TAX_INVOICE')
           + (SELECT COUNT(*) FROM follow_up_activities WHERE created_by=?)
           + (SELECT COUNT(*) FROM tax_invoice_purchase_allocations WHERE created_by=?)
           + (SELECT COUNT(*) FROM attachments WHERE uploaded_by=?)
