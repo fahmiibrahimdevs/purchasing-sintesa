@@ -99,7 +99,7 @@ export function SectionHeading({ title, description, action }: { title: string; 
 
 export type SummaryCardData = { label: string; value: React.ReactNode; unit?: string; detail?: React.ReactNode; icon: LucideIcon; tone?: "blue" | "amber" | "violet" | "emerald" | "orange"; loading?: boolean };
 
-export function SummaryCards({ cards, columns = 4 }: { cards: SummaryCardData[]; columns?: 2 | 3 | 4 }) {
+export function SummaryCards({ cards, columns = 4, autoFit = false }: { cards: SummaryCardData[]; columns?: 2 | 3 | 4; autoFit?: boolean }) {
   const tones = {
     blue: "bg-blue-600 text-white shadow-blue-100",
     amber: "bg-amber-500 text-white shadow-amber-100",
@@ -108,7 +108,7 @@ export function SummaryCards({ cards, columns = 4 }: { cards: SummaryCardData[];
     orange: "bg-orange-500 text-white shadow-orange-100",
   };
   const columnClass = columns === 2 ? "sm:grid-cols-2 xl:grid-cols-2" : columns === 3 ? "sm:grid-cols-2 xl:grid-cols-3" : "sm:grid-cols-2 xl:grid-cols-4";
-  return <div className={`mb-5 grid gap-3 ${columnClass}`}>{cards.map((card) => <article key={card.label} className="flex min-h-[88px] min-w-0 items-center gap-3 rounded-2xl border border-slate-200 bg-white px-3.5 py-3 shadow-card">
+  return <div className={`mb-5 grid gap-3 ${autoFit ? "" : columnClass}`} style={autoFit ? { gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))" } : undefined}>{cards.map((card) => <article key={card.label} className="flex min-h-[88px] min-w-0 items-center gap-3 rounded-2xl border border-slate-200 bg-white px-3.5 py-3 shadow-card">
     <span className={`grid h-11 w-11 shrink-0 place-items-center rounded-xl shadow-sm ${tones[card.tone || "blue"]}`}><card.icon size={20} /></span>
     <div className="min-w-0"><p className="text-xs font-semibold text-slate-600">{card.label}</p><div className="mt-0.5 flex min-h-6 items-center gap-1.5">{card.loading ? <Skeleton className="h-4 w-10" /> : <><span className="truncate text-lg font-bold leading-6 text-slate-900">{card.value}</span>{card.unit && <span className="shrink-0 text-xs text-slate-500">{card.unit}</span>}</>}</div><p className="truncate text-[11px] text-slate-500">{card.loading ? <Skeleton className="h-3 w-28" /> : card.detail}</p></div>
   </article>)}</div>;

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Banknote, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, CircleAlert, Download, Eye, FileUp, LoaderCircle, Pencil, Plus, ReceiptText, RotateCcw, Search, ShoppingBag, Table2, Rows3, Trash2 } from "lucide-react";
+import { ArrowLeft, BadgeCheck, Ban, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, CircleAlert, Download, Eye, FileUp, FolderKanban, LoaderCircle, Pencil, Plus, ReceiptText, RotateCcw, Search, ShoppingBag, Table2, Rows3, Trash2 } from "lucide-react";
 import { api, dateText, dateTimeText, downloadFile, jsonBody, money, quantityText } from "../lib/api";
 import { useDebouncedValue } from "../lib/hooks";
 import { InvoiceAttachment, PageResult, Project, PurchaseDocument, PurchaseItem, Supplier, User } from "../types";
@@ -13,7 +13,19 @@ const inputClass = sharedInputClass.replace("rounded-xl", "rounded-lg");
 type PurchaseEditorRoute = { mode: "new" } | { mode: "edit"; id: string } | null;
 type AttachmentPreview = Pick<InvoiceAttachment, "id" | "original_filename" | "mime_type"> & Partial<Pick<InvoiceAttachment, "nsfp" | "invoice_date">> & { uploaded_at?: string };
 type PurchaseSourceAttachment = AttachmentPreview & { category: string; file_size: number; uploaded_at: string };
-type PurchaseSummary = { purchase_documents_this_month: number; purchase_value_this_month: number; total_items: number; items_requiring_invoice: number; missing_invoice_file_items: number };
+type ProjectPurchaseSummary = { project_id: string; project_name: string; document_count: number; item_count: number; purchase_total: number };
+type PurchaseSummary = {
+  purchase_documents_this_month: number;
+  purchase_value_this_month: number;
+  project_purchases_this_month: ProjectPurchaseSummary[];
+  unassigned_purchase_this_month: Pick<ProjectPurchaseSummary, "document_count" | "item_count" | "purchase_total">;
+  invoice_required_items_this_month: number;
+  non_invoice_items_this_month: number;
+  unclassified_items_this_month: number;
+  total_items: number;
+  items_requiring_invoice: number;
+  missing_invoice_file_items: number;
+};
 type PriceTaxMode = "INCLUSIVE" | "EXCLUSIVE";
 type ItemDraft = { project_id: string; item_name: string; item_description: string; quantity: string; uom: string; unit_price: string; invoice_requirement: "REQUIRED" | "NOT_REQUIRED"; item_notes: string };
 const newItem = (invoiceRequirement: ItemDraft["invoice_requirement"] = "REQUIRED"): ItemDraft => ({ project_id: "", item_name: "", item_description: "", quantity: "1", uom: "Unit", unit_price: "0", invoice_requirement: invoiceRequirement, item_notes: "" });
@@ -41,6 +53,16 @@ const parseRupiahDraft = (value: string) => {
 };
 const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 const purchasePpnRate = 0.11;
+function localDateInputValue(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+function thisMonthDateRange() {
+  const today = new Date();
+  return {
+    from: localDateInputValue(new Date(today.getFullYear(), today.getMonth(), 1)),
+    to: localDateInputValue(new Date(today.getFullYear(), today.getMonth() + 1, 0)),
+  };
+}
 const itemAmounts = (item: ItemDraft, mode: PriceTaxMode) => {
   const enteredPrice = roundMoney(numeric(item.unit_price));
   const isTaxable = item.invoice_requirement === "REQUIRED";
@@ -115,11 +137,13 @@ function purchaseEditorFromHash(): PurchaseEditorRoute {
 }
 
 export function PurchasePage({ user, notify }: Props) {
+  const defaultDateRange = useMemo(() => thisMonthDateRange(), []);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(15);
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search.trim());
   const [supplierId, setSupplierId] = useState("");
+  const [dateRange, setDateRange] = useState(defaultDateRange);
   const [invoiceFilter, setInvoiceFilter] = useState<"" | "REQUIRED" | "NOT_REQUIRED">("");
   const [projectFilter, setProjectFilter] = useState("");
   const [view, setView] = useState<"grouped" | "flat">("flat");
@@ -130,9 +154,11 @@ export function PurchasePage({ user, notify }: Props) {
   const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
   if (debouncedSearch) params.set("q", debouncedSearch);
   if (supplierId) params.set("supplierId", supplierId);
+  if (dateRange.from) params.set("from", dateRange.from);
+  if (dateRange.to) params.set("to", dateRange.to);
   if (invoiceFilter) params.set("invoiceRequirement", invoiceFilter);
   if (projectFilter) params.set("projectId", projectFilter);
-  const { data, isLoading, error } = useQuery({ queryKey: ["purchases", page, pageSize, debouncedSearch, supplierId, invoiceFilter, projectFilter], queryFn: () => api<PageResult<PurchaseDocument>>(`/api/purchase-documents?${params}`) });
+  const { data, isLoading, error } = useQuery({ queryKey: ["purchases", page, pageSize, debouncedSearch, supplierId, dateRange.from, dateRange.to, invoiceFilter, projectFilter], queryFn: () => api<PageResult<PurchaseDocument>>(`/api/purchase-documents?${params}`) });
   const { data: suppliers = [] } = useQuery({ queryKey: ["suppliers"], queryFn: () => api<Supplier[]>("/api/suppliers") });
   const { data: projects = [] } = useQuery({ queryKey: ["projects"], queryFn: () => api<Project[]>("/api/projects") });
   const editorId = editorRoute?.mode === "edit" ? editorRoute.id : "";
@@ -166,13 +192,30 @@ export function PurchasePage({ user, notify }: Props) {
   const visiblePageCount = Math.min(5, totalPages);
   const firstVisiblePage = Math.min(Math.max(1, page - 2), Math.max(1, totalPages - visiblePageCount + 1));
   const visiblePages = Array.from({ length: visiblePageCount }, (_, index) => firstVisiblePage + index);
-  const hasActiveFilters = Boolean(search.trim() || supplierId || invoiceFilter || projectFilter);
+  const hasActiveFilters = Boolean(search.trim() || supplierId || invoiceFilter || projectFilter || dateRange.from !== defaultDateRange.from || dateRange.to !== defaultDateRange.to);
   const toggle = (id: string) => setOpenIds((previous) => { const next = new Set(previous); next.has(id) ? next.delete(id) : next.add(id); return next; });
+  const projectTones = ["blue", "emerald", "violet", "amber"] as const;
+  const projectCards = (summary?.project_purchases_this_month || []).map((project, index) => ({
+    label: project.project_name,
+    value: money(project.purchase_total),
+    detail: `${project.document_count} dokumen · ${project.item_count} barang bulan ini`,
+    loading: summaryLoading,
+    icon: FolderKanban,
+    tone: projectTones[index % projectTones.length],
+  }));
+  projectCards.push({
+    label: "Tanpa project",
+    value: money(summary?.unassigned_purchase_this_month?.purchase_total ?? 0),
+    detail: `${summary?.unassigned_purchase_this_month?.document_count ?? 0} dokumen · ${summary?.unassigned_purchase_this_month?.item_count ?? 0} barang bulan ini`,
+    loading: summaryLoading,
+    icon: FolderKanban,
+    tone: "amber",
+  });
   const cards = [
-    { label: "Pembelian bulan ini", value: summary?.purchase_documents_this_month ?? 0, unit: "dokumen", detail: "Jumlah transaksi yang dicatat bulan ini", loading: summaryLoading, icon: ShoppingBag, tone: "blue" as const },
-    { label: "Nilai pembelian bulan ini", value: money(summary?.purchase_value_this_month ?? 0), detail: "Total nilai transaksi bulan ini", loading: summaryLoading, icon: Banknote, tone: "emerald" as const },
-    { label: "Barang perlu faktur", value: `${summary?.items_requiring_invoice ?? 0}/${summary?.total_items ?? 0}`, unit: "barang", detail: "Jumlah barang wajib faktur dari semua barang pembelian", loading: summaryLoading, icon: ReceiptText, tone: "violet" as const },
-    { label: "Belum ada faktur", value: `${summary?.missing_invoice_file_items ?? 0}/${summary?.items_requiring_invoice ?? 0}`, unit: "barang", detail: "Belum memiliki file faktur pajak yang diunggah", loading: summaryLoading, icon: CircleAlert, tone: "amber" as const },
+    { label: "Pembelian bulan ini", value: money(summary?.purchase_value_this_month ?? 0), detail: `${summary?.purchase_documents_this_month ?? 0} dokumen pembelian`, loading: summaryLoading, icon: ShoppingBag, tone: "blue" as const },
+    { label: "Belum ada faktur", value: summary?.missing_invoice_file_items ?? 0, unit: "barang", detail: `Dari ${summary?.items_requiring_invoice ?? 0} barang status Faktur · semua periode`, loading: summaryLoading, icon: CircleAlert, tone: "amber" as const },
+    { label: "Barang Faktur bulan ini", value: summary?.invoice_required_items_this_month ?? 0, unit: "barang", detail: summary?.unclassified_items_this_month ? `${summary.unclassified_items_this_month} barang belum ditetapkan` : "Berstatus Faktur", loading: summaryLoading, icon: BadgeCheck, tone: "violet" as const },
+    { label: "Barang Non faktur bulan ini", value: summary?.non_invoice_items_this_month ?? 0, unit: "barang", detail: "Berstatus Non faktur", loading: summaryLoading, icon: Ban, tone: "emerald" as const },
   ];
 
   if (editorRoute) {
@@ -185,9 +228,24 @@ export function PurchasePage({ user, notify }: Props) {
   return <div>
     <SectionHeading title="Kelola Pembelian" description="Catat transaksi pemasok, pantau kelengkapan faktur, dan telusuri barang dalam setiap pembelian." action={canCreate && <Button onClick={() => openEditor({ mode: "new" })}><Plus size={16} />Tambah Pembelian</Button>} />
     <SummaryCards cards={cards} columns={4} />
+    <section className="mb-5">
+      <div className="mb-2"><h3 className="text-sm font-semibold text-slate-800">Pembelian per project bulan ini</h3><p className="mt-0.5 text-xs text-slate-500">Nilai transaksi dan jumlah barang pada setiap project.</p></div>
+      {summaryLoading ? <LoadingState label="Menghitung pembelian per project bulan ini…" compact /> : projectCards.length ? <SummaryCards cards={projectCards} autoFit /> : <div className="mb-5 rounded-xl border border-dashed border-slate-300 bg-white px-4 py-5 text-sm text-slate-500">Belum ada pembelian per project bulan ini.</div>}
+    </section>
     <section className="mb-4 space-y-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-card">
       <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
-        <div className="relative min-w-[220px] flex-1"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} /><input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} className={`${inputClass} pl-9`} placeholder="Cari kode, supplier, dokumen, barang…" /></div>
+        <div className="relative min-w-[200px] flex-1"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} /><input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} className={`${inputClass} pl-9`} placeholder="Cari kode, supplier, dokumen, barang…" /></div>
+        <div className="flex h-[42px] shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2" role="group" aria-label="Rentang tanggal pembelian">
+          <label className="flex min-w-0 flex-col justify-center px-0.5">
+            <span className="text-[9px] font-semibold uppercase leading-3 tracking-wide text-slate-400">Dari</span>
+            <input type="date" aria-label="Tanggal mulai" title="Tanggal mulai" value={dateRange.from} max={dateRange.to || undefined} onChange={(event) => { setDateRange((range) => ({ ...range, from: event.target.value })); setPage(1); }} className="h-5 w-[116px] min-w-0 bg-transparent text-xs font-medium text-slate-700 outline-none" />
+          </label>
+          <span aria-hidden="true" className="h-6 w-px shrink-0 bg-slate-200" />
+          <label className="flex min-w-0 flex-col justify-center px-0.5">
+            <span className="text-[9px] font-semibold uppercase leading-3 tracking-wide text-slate-400">Sampai</span>
+            <input type="date" aria-label="Tanggal akhir" title="Tanggal akhir" value={dateRange.to} min={dateRange.from || undefined} onChange={(event) => { setDateRange((range) => ({ ...range, to: event.target.value })); setPage(1); }} className="h-5 w-[116px] min-w-0 bg-transparent text-xs font-medium text-slate-700 outline-none" />
+          </label>
+        </div>
         <SearchableSelect className={`${inputClass} lg:w-[220px]`} value={supplierId} placeholder="Semua supplier" searchPlaceholder="Cari supplier…" options={suppliers.map((s) => ({ value: s.id, label: s.name, sublabel: s.supplier_code }))} onChange={(value) => { setSupplierId(value); setPage(1); }} />
         <div className="inline-flex w-fit shrink-0 items-center rounded-xl bg-slate-100 p-1">
           <button type="button" onClick={() => setView("grouped")} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold ${view === "grouped" ? "bg-white text-blue-700 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}><Rows3 size={15} />Grouped</button>
@@ -204,7 +262,7 @@ export function PurchasePage({ user, notify }: Props) {
         <div role="group" aria-label="Filter project" className="flex shrink-0 gap-1">
           {[{ value: "", label: "Semua project" }, ...projects.map((project) => ({ value: project.id, label: project.name })), { value: "none", label: "Tanpa project" }].map((tab) => <button key={tab.value || "all-projects"} type="button" aria-pressed={projectFilter === tab.value} onClick={() => { setProjectFilter(tab.value); setPage(1); setOpenIds(new Set()); }} className={`shrink-0 rounded-lg px-3.5 py-2 text-sm font-semibold transition ${projectFilter === tab.value ? "bg-blue-700 text-white shadow-sm" : "text-blue-800 hover:bg-blue-50"}`}>{tab.label}</button>)}
         </div>
-        <button type="button" disabled={!hasActiveFilters} onClick={() => { setSearch(""); setSupplierId(""); setInvoiceFilter(""); setProjectFilter(""); setPage(1); setOpenIds(new Set()); }} className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"><RotateCcw size={14} />Reset semua filter</button>
+        <button type="button" disabled={!hasActiveFilters} onClick={() => { setSearch(""); setSupplierId(""); setDateRange(defaultDateRange); setInvoiceFilter(""); setProjectFilter(""); setPage(1); setOpenIds(new Set()); }} className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"><RotateCcw size={14} />Reset semua filter</button>
       </div>
     </section>
     <ErrorBanner message={error instanceof Error ? error.message : null} />
