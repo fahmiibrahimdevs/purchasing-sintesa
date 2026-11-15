@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { AppEnv, allowRoles, sessionAuth } from "../auth";
 import { pool } from "../db/database";
+import { activeCancelledAttachmentKeys } from "../utils/invoiceFileVersions";
 import { itemsForDocuments } from "./purchases";
 
 const router = new Hono<AppEnv>();
@@ -19,6 +20,40 @@ router.get("/dashboard-summary", async (c) => {
        AND invoice_date < DATE_ADD(DATE_FORMAT(CURDATE(), '%Y-%m-01'), INTERVAL 1 MONTH)
      GROUP BY lifecycle_status`
   );
+  const [monthlyInvoiceDetailRows] = await pool.query(
+    `SELECT id, lifecycle_status, ppn_amount FROM tax_invoices
+     WHERE invoice_date >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
+       AND invoice_date < DATE_ADD(DATE_FORMAT(CURDATE(), '%Y-%m-01'), INTERVAL 1 MONTH)`
+  );
+  const [replacementCandidates] = await pool.query(
+    `SELECT ti.id, latest.id AS latest_attachment_id
+     FROM tax_invoices ti
+     JOIN attachments latest ON latest.id=(
+       SELECT att.id FROM attachments att
+       WHERE att.tax_invoice_id=ti.id AND att.category='TAX_INVOICE_PDF'
+       ORDER BY att.uploaded_at DESC, att.id DESC LIMIT 1
+     )
+     WHERE ti.lifecycle_status NOT IN ('CANCELLED','REPLACED')`
+  );
+  const replacementRows = replacementCandidates as any[];
+  const replacementInvoiceIds = replacementRows.map((row) => String(row.id));
+  const cancelledAttachmentKeys = new Set<string>();
+  if (replacementInvoiceIds.length) {
+    const placeholders = replacementInvoiceIds.map(() => "?").join(",");
+    const [replacementEvents] = await pool.execute(
+      `SELECT id, tax_invoice_id, event_type, new_values FROM tax_invoice_events
+       WHERE event_type IN ('FILE_VERSION_CANCELLED','FILE_VERSION_RESTORED')
+         AND tax_invoice_id IN (${placeholders})`,
+      replacementInvoiceIds
+    );
+    for (const key of activeCancelledAttachmentKeys(replacementEvents as any[])) cancelledAttachmentKeys.add(key);
+  }
+  const replacementPendingIds = new Set(replacementRows
+    .filter((row) => cancelledAttachmentKeys.has(`${row.id}:${row.latest_attachment_id}`))
+    .map((row) => String(row.id)));
+  const activeInvoiceStatuses = new Set(["RECEIVED", "UNDER_REVIEW", "VERIFIED"]);
+  const activeMonthlyInvoices = (monthlyInvoiceDetailRows as any[]).filter((row) =>
+    activeInvoiceStatuses.has(String(row.lifecycle_status)) && !replacementPendingIds.has(String(row.id)));
   const [projectPurchaseRows] = await pool.query(
     `SELECT p.id AS project_id, p.name AS project_name,
        COALESCE(monthly.document_count, 0) AS document_count,
@@ -82,12 +117,100 @@ router.get("/dashboard-summary", async (c) => {
     non_invoice_items_this_month: Number((monthlyItemRows as any[])[0]?.non_invoice_count || 0),
     unclassified_items_this_month: Number((monthlyItemRows as any[])[0]?.unclassified_count || 0),
     invoice_status_counts: statusCounts,
+    active_invoices_this_month: activeMonthlyInvoices.length,
+    active_invoice_ppn_this_month: activeMonthlyInvoices.reduce((sum, row) => sum + Number(row.ppn_amount || 0), 0),
+    replacement_invoices_pending: replacementPendingIds.size,
     total_items: allItems.length,
     items_requiring_invoice: invoiceRequiredItems.length,
     missing_invoice_file_items: missingInvoiceFileItems.length,
     pending_items: pending.length,
     partial_items: pending.filter((item) => item.coverage_status === "PARTIAL").length,
     needs_review_items: pending.filter((item) => item.coverage_status === "NEEDS_REVIEW").length,
+  });
+});
+
+router.get("/dashboard-purchase-analytics", async (c) => {
+  const requestedYear = Number(c.req.query("year") || new Date().getFullYear());
+  const year = Number.isInteger(requestedYear) && requestedYear >= 2000 && requestedYear <= 9999
+    ? requestedYear
+    : new Date().getFullYear();
+  const from = `${year}-01-01`;
+  const to = `${year + 1}-01-01`;
+  const [rows] = await pool.execute(
+    `SELECT MONTH(d.purchase_date) AS month_number,
+       p.id AS project_id, COALESCE(p.name, 'Tanpa project') AS project_name,
+       SUM(CASE WHEN pi.invoice_requirement='REQUIRED' THEN COALESCE(pi.purchase_total, pi.purchase_subtotal + COALESCE(pi.purchase_tax_amount, 0)) ELSE 0 END) AS invoice_total,
+       SUM(CASE WHEN pi.invoice_requirement='NOT_REQUIRED' THEN COALESCE(pi.purchase_total, pi.purchase_subtotal + COALESCE(pi.purchase_tax_amount, 0)) ELSE 0 END) AS non_invoice_total,
+       SUM(CASE WHEN pi.invoice_requirement NOT IN ('REQUIRED', 'NOT_REQUIRED') OR pi.invoice_requirement IS NULL THEN COALESCE(pi.purchase_total, pi.purchase_subtotal + COALESCE(pi.purchase_tax_amount, 0)) ELSE 0 END) AS unclassified_total,
+       SUM(COALESCE(pi.purchase_tax_amount, 0)) AS ppn_total,
+       SUM(COALESCE(pi.purchase_total, pi.purchase_subtotal + COALESCE(pi.purchase_tax_amount, 0))) AS purchase_total
+     FROM purchase_items pi
+     JOIN purchase_documents d ON d.id=pi.purchase_document_id
+     LEFT JOIN projects p ON p.id=pi.project_id
+     WHERE d.record_status<>'CANCELLED' AND pi.record_status='ACTIVE'
+       AND d.purchase_date>=? AND d.purchase_date<?
+     GROUP BY MONTH(d.purchase_date), p.id, p.name
+     ORDER BY p.name, MONTH(d.purchase_date)`,
+    [from, to]
+  );
+  const [projectRows] = await pool.query(
+    "SELECT id, name FROM projects WHERE is_active=1 ORDER BY name"
+  );
+  const monthly = Array.from({ length: 12 }, (_, index) => ({
+    month: index + 1,
+    invoice_total: 0,
+    non_invoice_total: 0,
+    unclassified_total: 0,
+    ppn_total: 0,
+    purchase_total: 0,
+  }));
+  const projects = new Map<string, {
+    project_id: string | null;
+    project_name: string;
+    monthly_totals: number[];
+    annual_total: number;
+  }>();
+  for (const row of projectRows as any[]) {
+    projects.set(String(row.id), {
+      project_id: String(row.id),
+      project_name: String(row.name),
+      monthly_totals: Array(12).fill(0),
+      annual_total: 0,
+    });
+  }
+  for (const row of rows as any[]) {
+    const monthIndex = Number(row.month_number) - 1;
+    if (monthIndex < 0 || monthIndex > 11) continue;
+    const invoiceTotal = Number(row.invoice_total || 0);
+    const nonInvoiceTotal = Number(row.non_invoice_total || 0);
+    const unclassifiedTotal = Number(row.unclassified_total || 0);
+    const ppnTotal = Number(row.ppn_total || 0);
+    const purchaseTotal = Number(row.purchase_total || 0);
+    monthly[monthIndex].invoice_total += invoiceTotal;
+    monthly[monthIndex].non_invoice_total += nonInvoiceTotal;
+    monthly[monthIndex].unclassified_total += unclassifiedTotal;
+    monthly[monthIndex].ppn_total += ppnTotal;
+    monthly[monthIndex].purchase_total += purchaseTotal;
+
+    const projectId = row.project_id ? String(row.project_id) : null;
+    const projectKey = projectId || "__no_project__";
+    let project = projects.get(projectKey);
+    if (!project) {
+      project = {
+        project_id: projectId,
+        project_name: String(row.project_name || "Tanpa project"),
+        monthly_totals: Array(12).fill(0),
+        annual_total: 0,
+      };
+      projects.set(projectKey, project);
+    }
+    project.monthly_totals[monthIndex] += purchaseTotal;
+    project.annual_total += purchaseTotal;
+  }
+  return c.json({
+    year,
+    months: monthly,
+    projects: [...projects.values()].sort((a, b) => a.project_name.localeCompare(b.project_name, "id")),
   });
 });
 

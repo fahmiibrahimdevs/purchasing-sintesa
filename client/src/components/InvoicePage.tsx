@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, CircleAlert, Clock3, Download, ExternalLink, FileClock, FileText, FileUp, Folder, FolderOpen, Pencil, Plus, RotateCcw, Search, Trash2, XCircle } from "lucide-react";
+import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, CircleDollarSign, Download, ExternalLink, FileClock, FileText, FileUp, FileWarning, Folder, FolderOpen, Pencil, Plus, ReceiptText, RotateCcw, Rows3, Search, Table2, Trash2, XCircle } from "lucide-react";
 import { api, dateText, dateTimeText, downloadFile, jsonBody, money, monthText, quantityText } from "../lib/api";
 import { useDebouncedValue } from "../lib/hooks";
 import { confirmAction, showUndoToast } from "../lib/swal";
@@ -11,7 +11,20 @@ import { SearchableSelect } from "./SearchableSelect";
 type Props = { user: User; onCreateInvoice: (item?: PurchaseItem) => void; onEditInvoice: (invoiceId: string) => void; notify: (message: string, kind?: "success" | "error") => void };
 type InvoiceTableEntry = { item: PurchaseItem; quantity: number; dpp: number; ppn: number; total: number };
 type InvoiceTableGroup = { key: string; invoice?: InvoiceLink; purchaseDate: string; purchaseGroupCode: string; supplierName: string; entries: InvoiceTableEntry[] };
+type InvoiceTableRow = { key: string; group: InvoiceTableGroup; entry: InvoiceTableEntry };
 type InvoiceFilePreview = { id: string; nsfp: string; original_filename: string; mime_type: string; version?: number };
+
+function localDateInputValue(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function thisMonthDateRange() {
+  const today = new Date();
+  return {
+    from: localDateInputValue(new Date(today.getFullYear(), today.getMonth(), 1)),
+    to: localDateInputValue(new Date(today.getFullYear(), today.getMonth() + 1, 0)),
+  };
+}
 function invoiceTableStatus(invoice?: InvoiceLink) {
   if (!invoice) return "UNLINKED";
   if (invoice.file_replacement_pending) return "CANCELLED";
@@ -54,11 +67,13 @@ function isValidTaxPeriod(year: string, month: string) {
 }
 
 export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify }: Props) {
+  const defaultDateRange = useMemo(() => thisMonthDateRange(), []);
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search.trim());
   const [supplierId, setSupplierId] = useState("");
   const [projectId, setProjectId] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
+  const [dateRange, setDateRange] = useState(defaultDateRange);
+  const [view, setView] = useState<"grouped" | "flat">("flat");
   const [groupsPage, setGroupsPage] = useState(1);
   const [groupsPageSize, setGroupsPageSize] = useState(15);
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null);
@@ -68,7 +83,7 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify }: Pr
   const params = new URLSearchParams();
   if (debouncedSearch) params.set("q", debouncedSearch);
   if (supplierId) params.set("supplierId", supplierId);
-  if (projectId) params.set("projectId", projectId);
+  if (projectId && projectId !== "none") params.set("projectId", projectId);
   const { data: items = [], isLoading, error } = useQuery({
     queryKey: ["invoice-items", debouncedSearch, supplierId, projectId],
     queryFn: () => api<PurchaseItem[]>(`/api/purchase-items/invoice-items?${params}`),
@@ -77,37 +92,20 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify }: Pr
     queryKey: ["invoice-items", "coverage-summary"],
     queryFn: () => api<PurchaseItem[]>("/api/purchase-items/invoice-items"),
   });
+  const { data: invoiceSummary, isLoading: invoiceSummaryLoading } = useQuery({
+    queryKey: ["dashboard"],
+    queryFn: () => api<{ active_invoices_this_month: number; active_invoice_ppn_this_month: number; replacement_invoices_pending: number }>("/api/dashboard-summary"),
+  });
   const { data: suppliers = [] } = useQuery({ queryKey: ["suppliers"], queryFn: () => api<Supplier[]>("/api/suppliers") });
   const { data: projects = [] } = useQuery({ queryKey: ["projects"], queryFn: () => api<Project[]>("/api/projects") });
   const canWork = user.role === "TAX_STAFF" || user.role === "ADMIN";
-  const coverageCounts = useMemo(() => {
-    const purchaseGroups = new Map<string, Array<{ quantity: number; coveredQuantity: number }>>();
-    let itemsNeedingInvoice = 0;
-
-    for (const item of allCoverageItems) {
-      if (item.invoice_requirement !== "REQUIRED") continue;
-      const quantity = Math.max(0, Number(item.quantity) || 0);
-      const coveredQuantity = (item.invoice_links || [])
-        .filter((invoice) => !["CANCELLED", "REPLACED"].includes(invoice.lifecycle_status) && !invoice.file_replacement_pending)
-        .reduce((sum, invoice) => sum + Math.max(0, Number(invoice.allocated_quantity) || 0), 0);
-      if (coveredQuantity + 0.0001 < quantity) itemsNeedingInvoice += 1;
-
-      const groupKey = item.purchase_document_id || item.purchase_group_code || item.id;
-      const groupItems = purchaseGroups.get(groupKey) || [];
-      groupItems.push({ quantity, coveredQuantity });
-      purchaseGroups.set(groupKey, groupItems);
-    }
-
-    const counts = { itemsNeedingInvoice, completeNotes: 0, partialNotes: 0, uncoveredNotes: 0 };
-    for (const groupItems of purchaseGroups.values()) {
-      const isComplete = groupItems.every((item) => item.coveredQuantity + 0.0001 >= item.quantity);
-      const hasAnyCoverage = groupItems.some((item) => item.coveredQuantity > 0.0001);
-      if (isComplete) counts.completeNotes += 1;
-      else if (hasAnyCoverage) counts.partialNotes += 1;
-      else counts.uncoveredNotes += 1;
-    }
-    return counts;
-  }, [allCoverageItems]);
+  const itemsWithoutInvoice = useMemo(() => allCoverageItems.filter((item) => {
+    if (item.invoice_requirement !== "REQUIRED") return false;
+    const coveredQuantity = (item.invoice_links || [])
+      .filter((invoice) => !["CANCELLED", "REPLACED"].includes(invoice.lifecycle_status) && !invoice.file_replacement_pending)
+      .reduce((sum, invoice) => sum + Math.max(0, Number(invoice.allocated_quantity) || 0), 0);
+    return coveredQuantity <= 0.0001;
+  }).length, [allCoverageItems]);
   const tableGroups = useMemo(() => {
     const groups = new Map<string, InvoiceTableGroup>();
     const getGroup = (key: string, item: PurchaseItem, invoice?: InvoiceLink) => {
@@ -171,34 +169,55 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify }: Pr
       return dateB.localeCompare(dateA) || (a.invoice?.nsfp || a.purchaseGroupCode).localeCompare(b.invoice?.nsfp || b.purchaseGroupCode);
     });
   }, [items]);
-  const filteredTableGroups = useMemo(() => tableGroups.filter((group) => {
-    if (!group.invoice) return !statusFilter;
-    if (!statusFilter) return true;
-    if (statusFilter === "FILE_REPLACEMENT_PENDING") return Boolean(group.invoice.file_replacement_pending);
-    return invoiceTableStatus(group.invoice) === statusFilter;
-  }), [statusFilter, tableGroups]);
-  const groupsPageCount = Math.max(1, Math.ceil(filteredTableGroups.length / groupsPageSize));
-  const currentGroupsPage = Math.min(groupsPage, groupsPageCount);
+  const filteredTableGroups = useMemo(() => tableGroups.flatMap((group) => {
+    let entries = projectId
+      ? group.entries.filter((entry) => projectId === "none" ? !entry.item.project_id : entry.item.project_id === projectId)
+      : group.entries;
+    if (!entries.length) return [];
+    const dateMatches = (date: string) => {
+      const day = date.slice(0, 10);
+      return (!dateRange.from || day >= dateRange.from) && (!dateRange.to || day <= dateRange.to);
+    };
+    if (group.invoice) {
+      if (!dateMatches(group.invoice.invoice_date)) return [];
+    } else {
+      entries = entries.filter((entry) => dateMatches(entry.item.purchase_date || group.purchaseDate));
+      if (!entries.length) return [];
+    }
+    return [{ ...group, entries }];
+  }), [dateRange.from, dateRange.to, projectId, tableGroups]);
+  const flatTableRows = useMemo(() => filteredTableGroups.flatMap((group) => group.entries.map((entry, index) => ({
+    key: `${group.key}:${entry.item.id}:${index}`,
+    group,
+    entry,
+  }))), [filteredTableGroups]);
+  const displayedCount = view === "flat" ? flatTableRows.length : filteredTableGroups.length;
+  const displayedPageCount = Math.max(1, Math.ceil(displayedCount / groupsPageSize));
+  const currentGroupsPage = Math.min(groupsPage, displayedPageCount);
   const pageTableGroups = useMemo(() => filteredTableGroups.slice((currentGroupsPage - 1) * groupsPageSize, currentGroupsPage * groupsPageSize), [currentGroupsPage, filteredTableGroups, groupsPageSize]);
+  const pageTableRows = useMemo(() => flatTableRows.slice((currentGroupsPage - 1) * groupsPageSize, currentGroupsPage * groupsPageSize), [currentGroupsPage, flatTableRows, groupsPageSize]);
   const groupPageNumbers = useMemo(() => {
-    if (groupsPageCount <= 7) return Array.from({ length: groupsPageCount }, (_, index) => index + 1);
-    const candidates = Array.from(new Set([1, 2, currentGroupsPage - 1, currentGroupsPage, currentGroupsPage + 1, groupsPageCount - 1, groupsPageCount]))
-      .filter((page) => page >= 1 && page <= groupsPageCount).sort((a, b) => a - b);
+    if (displayedPageCount <= 7) return Array.from({ length: displayedPageCount }, (_, index) => index + 1);
+    const candidates = Array.from(new Set([1, 2, currentGroupsPage - 1, currentGroupsPage, currentGroupsPage + 1, displayedPageCount - 1, displayedPageCount]))
+      .filter((page) => page >= 1 && page <= displayedPageCount).sort((a, b) => a - b);
     const pages: Array<number | string> = [];
     candidates.forEach((page, index) => {
       if (index > 0 && page - candidates[index - 1] > 1) pages.push(`ellipsis-${candidates[index - 1]}-${page}`);
       pages.push(page);
     });
     return pages;
-  }, [currentGroupsPage, groupsPageCount]);
+  }, [currentGroupsPage, displayedPageCount]);
 
   useEffect(() => {
     setGroupsPage(1);
-  }, [debouncedSearch, supplierId, projectId, statusFilter, groupsPageSize]);
+  }, [debouncedSearch, supplierId, projectId, dateRange.from, dateRange.to, groupsPageSize, view]);
 
   useEffect(() => {
-    if (groupsPage > groupsPageCount) setGroupsPage(groupsPageCount);
-  }, [groupsPage, groupsPageCount]);
+    if (groupsPage > displayedPageCount) setGroupsPage(displayedPageCount);
+  }, [groupsPage, displayedPageCount]);
+
+  const hasActiveFilters = Boolean(search.trim() || supplierId || projectId
+    || dateRange.from !== defaultDateRange.from || dateRange.to !== defaultDateRange.to);
 
   function toggleGroup(groupKey: string) {
     setCollapsedGroups((current) => {
@@ -227,20 +246,57 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify }: Pr
   return <div>
     <SectionHeading title="Faktur Pajak" description="Pantau barang wajib faktur dan kelengkapan faktur pada setiap nota pembelian." action={canWork ? <Button onClick={() => onCreateInvoice()}><Plus size={16} />Input Faktur</Button> : undefined} />
     <SummaryCards cards={[
-      { label: "Barang perlu faktur", value: coverageCounts.itemsNeedingInvoice, unit: "barang", detail: "Barang wajib faktur yang masih belum tercakup", icon: FileText, tone: "blue", loading: coverageLoading },
-      { label: "Tercakup lengkap", value: coverageCounts.completeNotes, unit: "nota", detail: "Semua barang wajib faktur di nota sudah diinput", icon: CheckCircle2, tone: "emerald", loading: coverageLoading },
-      { label: "Tercakup sebagian", value: coverageCounts.partialNotes, unit: "nota", detail: "Sebagian sudah diinput, masih ada barang yang belum", icon: Clock3, tone: "amber", loading: coverageLoading },
-      { label: "Belum ada faktur", value: coverageCounts.uncoveredNotes, unit: "nota", detail: "Belum ada faktur yang ditautkan ke barang wajib faktur", icon: CircleAlert, tone: "violet", loading: coverageLoading },
+      { label: "Faktur tercatat bulan ini", value: invoiceSummary?.active_invoices_this_month ?? 0, unit: "faktur", detail: "Jumlah faktur aktif bertanggal bulan ini", icon: ReceiptText, tone: "blue", loading: invoiceSummaryLoading },
+      { label: "Nilai PPN bulan ini", value: money(invoiceSummary?.active_invoice_ppn_this_month), detail: "Total PPN pada faktur aktif bulan ini", icon: CircleDollarSign, tone: "emerald", loading: invoiceSummaryLoading },
+      { label: "Barang belum punya faktur", value: itemsWithoutInvoice, unit: "barang", detail: "Barang wajib faktur yang belum tertaut", icon: FileWarning, tone: "amber", loading: coverageLoading },
+      { label: "Menunggu faktur pengganti", value: invoiceSummary?.replacement_invoices_pending ?? 0, unit: "faktur", detail: "Versi terakhir dibatalkan dan belum diganti", icon: FileClock, tone: "violet", loading: invoiceSummaryLoading },
     ]} />
-    <div className="mb-4 grid gap-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-card sm:grid-cols-2 xl:grid-cols-[minmax(240px,1fr)_200px_200px_210px]">
-      <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} /><input className={`${inputClass} pl-9`} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Cari kode, supplier, nota, project, barang…" /></div>
-      <SearchableSelect className={inputClass} value={supplierId} placeholder="Semua supplier" searchPlaceholder="Cari supplier…" options={suppliers.filter((supplier) => supplier.is_active).map((supplier) => ({ value: supplier.id, label: supplier.name, sublabel: supplier.supplier_code }))} onChange={setSupplierId} />
-      <SearchableSelect className={inputClass} value={projectId} placeholder="Semua project" searchPlaceholder="Cari project…" options={projects.filter((project) => project.is_active).map((project) => ({ value: project.id, label: project.name, sublabel: project.project_code }))} onChange={setProjectId} />
-      <select aria-label="Filter status faktur" className={inputClass} value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">Semua status</option><option value="DRAFT">Draft</option><option value="RECORDED">Tercatat</option><option value="FILE_REPLACEMENT_PENDING">Menunggu faktur pengganti</option><option value="CANCELLED">Dibatalkan</option></select>
-    </div>
+    <section className="mb-4 space-y-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-card">
+      <div className="flex flex-col gap-2 xl:flex-row xl:items-center">
+        <div className="relative min-w-[200px] flex-1"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} /><input className={`${inputClass} pl-9`} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Cari kode, supplier, nota, project, barang…" /></div>
+        <div className="flex h-[42px] shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2" role="group" aria-label="Rentang tanggal faktur">
+          <label className="flex min-w-0 flex-col justify-center px-0.5"><span className="text-[9px] font-semibold uppercase leading-3 tracking-wide text-slate-400">Dari</span><input type="date" aria-label="Tanggal mulai" title="Tanggal mulai" value={dateRange.from} max={dateRange.to || undefined} onChange={(event) => { setDateRange((range) => ({ ...range, from: event.target.value })); setGroupsPage(1); }} className="h-5 w-[116px] min-w-0 bg-transparent text-xs font-medium text-slate-700 outline-none" /></label>
+          <span aria-hidden="true" className="h-6 w-px shrink-0 bg-slate-200" />
+          <label className="flex min-w-0 flex-col justify-center px-0.5"><span className="text-[9px] font-semibold uppercase leading-3 tracking-wide text-slate-400">Sampai</span><input type="date" aria-label="Tanggal akhir" title="Tanggal akhir" value={dateRange.to} min={dateRange.from || undefined} onChange={(event) => { setDateRange((range) => ({ ...range, to: event.target.value })); setGroupsPage(1); }} className="h-5 w-[116px] min-w-0 bg-transparent text-xs font-medium text-slate-700 outline-none" /></label>
+        </div>
+        <SearchableSelect className={`${inputClass} xl:w-[210px]`} value={supplierId} placeholder="Semua supplier" searchPlaceholder="Cari supplier…" options={suppliers.filter((supplier) => supplier.is_active).map((supplier) => ({ value: supplier.id, label: supplier.name, sublabel: supplier.supplier_code }))} onChange={setSupplierId} />
+        <div className="inline-flex w-fit shrink-0 items-center rounded-xl bg-slate-100 p-1">
+          <button type="button" aria-pressed={view === "grouped"} onClick={() => { setView("grouped"); setGroupsPage(1); }} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold ${view === "grouped" ? "bg-white text-blue-700 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}><Rows3 size={15} />Grouped</button>
+          <button type="button" aria-pressed={view === "flat"} onClick={() => { setView("flat"); setGroupsPage(1); }} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold ${view === "flat" ? "bg-white text-blue-700 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}><Table2 size={15} />Per barang</button>
+        </div>
+      </div>
+      <div className="flex max-w-full items-center gap-2 overflow-x-auto border-t border-slate-100 pt-2 pb-0.5">
+        <span className="shrink-0 text-xs font-semibold text-slate-500">Filter Project</span>
+        <div role="group" aria-label="Filter project" className="flex shrink-0 gap-1">
+          {[{ value: "", label: "Semua project" }, ...projects.map((project) => ({ value: project.id, label: project.name })), { value: "none", label: "Tanpa project" }].map((tab) => <button key={tab.value || "all-projects"} type="button" aria-pressed={projectId === tab.value} onClick={() => { setProjectId(tab.value); setGroupsPage(1); }} className={`shrink-0 rounded-lg px-3.5 py-2 text-sm font-semibold transition ${projectId === tab.value ? "bg-blue-700 text-white shadow-sm" : "text-blue-800 hover:bg-blue-50"}`}>{tab.label}</button>)}
+        </div>
+        <button type="button" disabled={!hasActiveFilters} onClick={() => { setSearch(""); setSupplierId(""); setProjectId(""); setDateRange(defaultDateRange); setGroupsPage(1); }} className="inline-flex h-[42px] shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"><RotateCcw size={14} />Reset semua filter</button>
+      </div>
+    </section>
     <ErrorBanner message={error instanceof Error ? error.message : null} />
     <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-card">
-      {isLoading ? <LoadingState label="Mengambil daftar barang berfaktur…" /> : !filteredTableGroups.length ? <div className="p-4"><EmptyState title={tableGroups.some((group) => group.invoice) ? "Tidak ada faktur dengan status ini" : "Belum ada faktur terinput"} description={tableGroups.some((group) => group.invoice) ? "Coba pilih status lain atau tampilkan semua status." : "Tabel ini hanya menampilkan barang yang sudah ditautkan ke faktur dan memiliki NSFP."} /></div> : <div className="overflow-x-auto"><table className="w-full min-w-[1220px] table-fixed text-left text-sm"><colgroup><col className="w-[205px]" /><col className="w-[295px]" /><col className="w-[82px]" /><col className="w-[90px]" /><col className="w-[145px]" /><col className="w-[155px]" /><col className="w-[135px]" /><col className="w-[155px]" /></colgroup><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-600"><tr><th className="px-3 py-3">Project</th><th className="px-3 py-3">Nama barang</th><th className="px-3 py-3 text-right">Qty</th><th className="px-3 py-3">UOM</th><th className="px-3 py-3 text-right">Harga</th><th className="px-3 py-3 text-right">Sub total</th><th className="px-3 py-3 text-right">PPN</th><th className="px-3 py-3 text-right">Total</th></tr></thead><tbody className="divide-y divide-slate-100">{pageTableGroups.map((group) => {
+      {isLoading ? <LoadingState label="Mengambil daftar barang berfaktur…" /> : !displayedCount ? <div className="p-4"><EmptyState title={tableGroups.some((group) => group.invoice) ? "Tidak ada data yang cocok" : "Belum ada faktur terinput"} description={tableGroups.some((group) => group.invoice) ? "Coba ubah rentang tanggal atau filter yang dipilih." : "Tabel ini menampilkan barang yang perlu ditautkan ke faktur."} /></div> : view === "flat" ? <div className="overflow-x-auto"><table className="w-full min-w-[1500px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-600"><tr><th className="px-3 py-3">Tanggal</th><th className="px-3 py-3">No. faktur</th><th className="px-3 py-3">Supplier</th><th className="px-3 py-3">Project</th><th className="px-3 py-3">Nama barang</th><th className="px-3 py-3 text-right">Qty</th><th className="px-3 py-3">UOM</th><th className="px-3 py-3 text-right">Harga</th><th className="px-3 py-3 text-right">Sub total</th><th className="px-3 py-3 text-right">PPN</th><th className="px-3 py-3 text-right">Total</th><th className="px-3 py-3">Status</th><th className="px-3 py-3">Aksi</th></tr></thead><tbody className="divide-y divide-slate-100">{pageTableRows.map(({ key, group, entry }) => {
+        const invoice = group.invoice;
+        const { item } = entry;
+        const canDelete = invoice?.lifecycle_status === "DRAFT";
+        const canEdit = Boolean(invoice && canWork && !["CANCELLED", "REPLACED"].includes(invoice.lifecycle_status));
+        const unitPrice = entry.quantity > 0 ? entry.dpp / entry.quantity : Number(item.unit_price || 0);
+        return <tr key={key} className="transition hover:bg-slate-50/70">
+          <td className="whitespace-nowrap px-3 py-2.5 text-slate-600">{dateText(invoice?.invoice_date || item.purchase_date || group.purchaseDate)}</td>
+          <td className="whitespace-nowrap px-3 py-2.5">{invoice ? <button type="button" onClick={() => setSelectedInvoiceId(invoice.id)} className="font-medium text-blue-700 hover:text-blue-900 hover:underline">{invoice.nsfp}</button> : <span className="text-slate-400">—</span>}</td>
+          <td className="whitespace-nowrap px-3 py-2.5">{group.supplierName}</td>
+          <td className="max-w-[180px] whitespace-normal px-3 py-2.5">{item.project_name || "Tanpa project"}</td>
+          <td className="max-w-[260px] whitespace-normal px-3 py-2.5 font-medium text-slate-900">{item.item_name}</td>
+          <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">{quantityText(entry.quantity)}</td>
+          <td className="whitespace-nowrap px-3 py-2.5 text-slate-700">{item.uom}</td>
+          <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">{money(unitPrice)}</td>
+          <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">{money(entry.dpp)}</td>
+          <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">{money(entry.ppn)}</td>
+          <td className="whitespace-nowrap px-3 py-2.5 text-right font-medium tabular-nums">{money(entry.total)}</td>
+          <td className="whitespace-nowrap px-3 py-2.5">{invoice?.file_replacement_pending ? <StatusBadge value="FILE_REPLACEMENT_PENDING" /> : invoice ? <StatusBadge value={invoiceTableStatus(invoice)} /> : <span className="inline-flex whitespace-nowrap rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">Belum tertaut</span>}</td>
+          <td className="whitespace-nowrap px-3 py-2.5"><div className="flex items-center gap-1.5">{invoice && canWork ? <><Button variant="secondary" title={`Edit faktur ${invoice.nsfp}`} className="px-2.5 py-1.5 text-xs" disabled={!canEdit} onClick={() => onEditInvoice(invoice.id)}><Pencil size={13} />Edit</Button><Button variant="dangerGhost" title={canDelete ? `Hapus draft ${invoice.nsfp}` : "Hanya faktur berstatus Draft yang bisa dihapus."} className="px-2 py-1.5 text-xs" disabled={!canDelete} onClick={() => void deleteDraftInvoice(invoice)}><Trash2 size={13} /></Button></> : !invoice && canWork ? <Button variant="secondary" className="px-2.5 py-1.5 text-xs" onClick={() => onCreateInvoice(item)}><Plus size={13} />Input faktur</Button> : <span className="text-slate-400">—</span>}</div></td>
+        </tr>;
+      })}</tbody></table></div> : <div className="overflow-x-auto"><table className="w-full min-w-[1220px] table-fixed text-left text-sm"><colgroup><col className="w-[205px]" /><col className="w-[295px]" /><col className="w-[82px]" /><col className="w-[90px]" /><col className="w-[145px]" /><col className="w-[155px]" /><col className="w-[135px]" /><col className="w-[155px]" /></colgroup><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-600"><tr><th className="px-3 py-3">Project</th><th className="px-3 py-3">Nama barang</th><th className="px-3 py-3 text-right">Qty</th><th className="px-3 py-3">UOM</th><th className="px-3 py-3 text-right">Harga</th><th className="px-3 py-3 text-right">Sub total</th><th className="px-3 py-3 text-right">PPN</th><th className="px-3 py-3 text-right">Total</th></tr></thead><tbody className="divide-y divide-slate-100">{pageTableGroups.map((group) => {
         const invoice = group.invoice;
         const collapsed = collapsedGroups.has(group.key);
         const subtotal = group.entries.reduce((sum, entry) => sum + entry.dpp, 0);
@@ -290,13 +346,13 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify }: Pr
           </tr>}
         </Fragment>;
       })}</tbody></table></div>}
-      {!isLoading && filteredTableGroups.length > 0 && <footer className="flex flex-col gap-3 border-t border-slate-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+      {!isLoading && displayedCount > 0 && <footer className="flex flex-col gap-3 border-t border-slate-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-col gap-2 text-xs text-slate-600 sm:flex-row sm:items-center sm:gap-4">
-          <span>Menampilkan <strong className="font-semibold text-slate-800">{(currentGroupsPage - 1) * groupsPageSize + 1} - {Math.min(currentGroupsPage * groupsPageSize, filteredTableGroups.length)}</strong> dari {filteredTableGroups.length} faktur</span>
+          <span>Menampilkan <strong className="font-semibold text-slate-800">{(currentGroupsPage - 1) * groupsPageSize + 1} - {Math.min(currentGroupsPage * groupsPageSize, displayedCount)}</strong> dari {displayedCount} {view === "flat" ? "barang" : "faktur"}</span>
           <label className="flex items-center gap-2" htmlFor="invoice-groups-page-size">Per hal:
             <select id="invoice-groups-page-size" value={groupsPageSize} onChange={(event) => setGroupsPageSize(Number(event.target.value))} className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100">{[15, 25, 50].map((size) => <option key={size} value={size}>{size}</option>)}</select>
           </label>
-          <span className="hidden text-slate-400 sm:inline">Klik header NSFP untuk membuka/menutup barang.</span>
+          {view === "grouped" && <span className="hidden text-slate-400 sm:inline">Klik header NSFP untuk membuka/menutup barang.</span>}
         </div>
         <nav aria-label="Halaman faktur pajak" className="flex items-center gap-1 self-end sm:self-auto">
           <button type="button" aria-label="Halaman pertama" title="Halaman pertama" disabled={currentGroupsPage === 1} onClick={() => setGroupsPage(1)} className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"><ChevronsLeft size={15} /></button>
@@ -304,8 +360,8 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify }: Pr
           {groupPageNumbers.map((page) => typeof page === "number"
             ? <button key={page} type="button" aria-label={`Halaman ${page}`} aria-current={currentGroupsPage === page ? "page" : undefined} onClick={() => setGroupsPage(page)} className={`grid h-8 min-w-8 place-items-center rounded-lg border px-2 text-xs font-medium transition ${currentGroupsPage === page ? "border-blue-600 bg-blue-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>{page}</button>
             : <span key={page} aria-hidden="true" className="px-1 text-xs text-slate-400">…</span>)}
-          <button type="button" aria-label="Halaman berikutnya" title="Halaman berikutnya" disabled={currentGroupsPage === groupsPageCount} onClick={() => setGroupsPage(currentGroupsPage + 1)} className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"><ChevronRight size={15} /></button>
-          <button type="button" aria-label="Halaman terakhir" title="Halaman terakhir" disabled={currentGroupsPage === groupsPageCount} onClick={() => setGroupsPage(groupsPageCount)} className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"><ChevronsRight size={15} /></button>
+          <button type="button" aria-label="Halaman berikutnya" title="Halaman berikutnya" disabled={currentGroupsPage === displayedPageCount} onClick={() => setGroupsPage(currentGroupsPage + 1)} className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"><ChevronRight size={15} /></button>
+          <button type="button" aria-label="Halaman terakhir" title="Halaman terakhir" disabled={currentGroupsPage === displayedPageCount} onClick={() => setGroupsPage(displayedPageCount)} className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"><ChevronsRight size={15} /></button>
         </nav>
       </footer>}
     </section>
