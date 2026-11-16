@@ -284,14 +284,70 @@ export function PurchasePage({ user, notify, navHighlight, onClearNavHighlight }
       <div className="flex max-w-full items-center gap-2 overflow-x-auto border-t border-slate-100 pt-2 pb-0.5">
         <span className="shrink-0 text-xs font-semibold text-slate-500">Filter Faktur</span>
         <div role="group" aria-label="Filter jenis faktur" className="flex shrink-0 gap-1">
-          {([{ value: "", label: "Semua barang" }, { value: "REQUIRED", label: "Faktur" }, { value: "NOT_REQUIRED", label: "Non faktur" }] as const).map((tab) => <button key={tab.value || "all"} type="button" aria-pressed={invoiceFilter === tab.value} onClick={() => { setInvoiceFilter(tab.value); setPage(1); setOpenIds(new Set()); }} className={`shrink-0 rounded-lg px-3.5 py-2 text-sm font-semibold transition ${invoiceFilter === tab.value ? "bg-blue-700 text-white shadow-sm" : "text-blue-800 hover:bg-blue-50"}`}>{tab.label}</button>)}
+          {[
+            { value: "", label: "Semua barang", count: summary?.total_items },
+            { value: "REQUIRED", label: "Faktur", count: summary?.items_requiring_invoice },
+            { value: "NOT_REQUIRED", label: "Non faktur", count: summary ? (summary.total_items - summary.items_requiring_invoice) : undefined },
+          ].map((tab) => {
+            const active = invoiceFilter === tab.value;
+            return (
+              <button
+                key={tab.value || "all"}
+                type="button"
+                aria-pressed={active}
+                onClick={() => { setInvoiceFilter(tab.value as any); setPage(1); setOpenIds(new Set()); }}
+                className={`inline-flex items-center gap-1.5 shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                  active ? "bg-blue-700 text-white shadow-sm" : "text-blue-800 hover:bg-blue-50"
+                }`}
+              >
+                <span>{tab.label}</span>
+                {tab.count !== undefined && (
+                  <span className={`inline-flex items-center justify-center rounded-full px-1.5 py-0.2 text-[10px] font-bold ${
+                    active ? "bg-white/25 text-white" : "bg-blue-100 text-blue-800"
+                  }`}>
+                    {tab.count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
         <span aria-hidden="true" className="shrink-0 px-1 text-slate-300">|</span>
         <span className="shrink-0 text-xs font-semibold text-slate-500">Filter Project</span>
         <div role="group" aria-label="Filter project" className="flex shrink-0 gap-1">
-          {[{ value: "", label: "Semua project" }, ...projects.map((project) => ({ value: project.id, label: project.name })), { value: "none", label: "Tanpa project" }].map((tab) => <button key={tab.value || "all-projects"} type="button" aria-pressed={projectFilter === tab.value} onClick={() => { setProjectFilter(tab.value); setPage(1); setOpenIds(new Set()); }} className={`shrink-0 rounded-lg px-3.5 py-2 text-sm font-semibold transition ${projectFilter === tab.value ? "bg-blue-700 text-white shadow-sm" : "text-blue-800 hover:bg-blue-50"}`}>{tab.label}</button>)}
+          {[
+            { value: "", label: "Semua project", count: summary?.total_items },
+            ...projects.map((project) => ({
+              value: project.id,
+              label: project.name,
+              count: summary?.project_purchases_this_month.find((p) => p.project_id === project.id)?.item_count ?? 0,
+            })),
+            { value: "none", label: "Tanpa project", count: summary?.unassigned_purchase_this_month?.item_count ?? 0 },
+          ].map((tab) => {
+            const active = projectFilter === tab.value;
+            return (
+              <button
+                key={tab.value || "all-projects"}
+                type="button"
+                aria-pressed={active}
+                onClick={() => { setProjectFilter(tab.value); setPage(1); setOpenIds(new Set()); }}
+                className={`inline-flex items-center gap-1.5 shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                  active ? "bg-blue-700 text-white shadow-sm" : "text-blue-800 hover:bg-blue-50"
+                }`}
+              >
+                <span>{tab.label}</span>
+                {tab.count !== undefined && (
+                  <span className={`inline-flex items-center justify-center rounded-full px-1.5 py-0.2 text-[10px] font-bold ${
+                    active ? "bg-white/25 text-white" : "bg-blue-100 text-blue-800"
+                  }`}>
+                    {tab.count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
-        <button type="button" disabled={!hasActiveFilters} onClick={() => { setSearch(""); setSupplierId(""); setDateRange(defaultDateRange); setInvoiceFilter(""); setProjectFilter(""); setPage(1); setOpenIds(new Set()); }} className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"><RotateCcw size={14} />Reset semua filter</button>
+        <button type="button" disabled={!hasActiveFilters} onClick={() => { setSearch(""); setSupplierId(""); setDateRange(defaultDateRange); setInvoiceFilter(""); setProjectFilter(""); setPage(1); setOpenIds(new Set()); }} className="ml-auto inline-flex h-[34px] shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"><RotateCcw size={13} />Reset semua filter</button>
       </div>
     </section>
     <ErrorBanner message={error instanceof Error ? error.message : null} />

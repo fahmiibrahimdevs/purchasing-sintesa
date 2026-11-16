@@ -79,6 +79,7 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify, navH
   const debouncedSearch = useDebouncedValue(search.trim());
   const [supplierId, setSupplierId] = useState("");
   const [projectId, setProjectId] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"" | "unlinked" | "complete" | "replacement">("");
   const [dateRange, setDateRange] = useState(defaultDateRange);
   const [view, setView] = useState<"grouped" | "flat">("flat");
   const [groupsPage, setGroupsPage] = useState(1);
@@ -182,6 +183,69 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify, navH
       return dateB.localeCompare(dateA) || (a.invoice?.nsfp || a.purchaseGroupCode).localeCompare(b.invoice?.nsfp || b.purchaseGroupCode);
     });
   }, [items]);
+  const statusCounts = useMemo(() => {
+    let all = 0;
+    let unlinked = 0;
+    let complete = 0;
+    let replacement = 0;
+
+    for (const group of tableGroups) {
+      const isUnlinked = !group.invoice;
+      const isReplacement = Boolean(group.invoice && (group.invoice.file_replacement_pending || group.invoice.lifecycle_status === "CANCELLED"));
+      const isComplete = Boolean(group.invoice && !isReplacement);
+
+      const dateMatches = (date: string) => {
+        const day = date.slice(0, 10);
+        return (!dateRange.from || day >= dateRange.from) && (!dateRange.to || day <= dateRange.to);
+      };
+      if (group.invoice && !dateMatches(group.invoice.invoice_date)) continue;
+      if (!group.invoice && !group.entries.some((e) => dateMatches(e.item.purchase_date || group.purchaseDate))) continue;
+
+      const matchingEntries = projectId
+        ? group.entries.filter((entry) => projectId === "none" ? !entry.item.project_id : entry.item.project_id === projectId)
+        : group.entries;
+      if (!matchingEntries.length) continue;
+
+      const count = matchingEntries.length;
+      all += count;
+      if (isUnlinked) unlinked += count;
+      if (isComplete) complete += count;
+      if (isReplacement) replacement += count;
+    }
+
+    return { all, unlinked, complete, replacement };
+  }, [tableGroups, dateRange.from, dateRange.to, projectId]);
+
+  const projectCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    let all = 0;
+    let none = 0;
+
+    for (const group of tableGroups) {
+      const dateMatches = (date: string) => {
+        const day = date.slice(0, 10);
+        return (!dateRange.from || day >= dateRange.from) && (!dateRange.to || day <= dateRange.to);
+      };
+      if (group.invoice && !dateMatches(group.invoice.invoice_date)) continue;
+      if (!group.invoice && !group.entries.some((e) => dateMatches(e.item.purchase_date || group.purchaseDate))) continue;
+
+      if (statusFilter === "unlinked" && group.invoice) continue;
+      if (statusFilter === "complete" && (!group.invoice || group.invoice.lifecycle_status === "CANCELLED" || group.invoice.file_replacement_pending)) continue;
+      if (statusFilter === "replacement" && (!group.invoice || (!group.invoice.file_replacement_pending && group.invoice.lifecycle_status !== "CANCELLED"))) continue;
+
+      for (const entry of group.entries) {
+        all++;
+        if (!entry.item.project_id) {
+          none++;
+        } else {
+          counts.set(entry.item.project_id, (counts.get(entry.item.project_id) || 0) + 1);
+        }
+      }
+    }
+
+    return { all, none, get: (id: string) => counts.get(id) || 0 };
+  }, [tableGroups, dateRange.from, dateRange.to, statusFilter]);
+
   const filteredTableGroups = useMemo(() => tableGroups.flatMap((group) => {
     let entries = projectId
       ? group.entries.filter((entry) => projectId === "none" ? !entry.item.project_id : entry.item.project_id === projectId)
@@ -197,8 +261,17 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify, navH
       entries = entries.filter((entry) => dateMatches(entry.item.purchase_date || group.purchaseDate));
       if (!entries.length) return [];
     }
+
+    if (statusFilter === "unlinked") {
+      if (group.invoice) return [];
+    } else if (statusFilter === "complete") {
+      if (!group.invoice || group.invoice.lifecycle_status === "CANCELLED" || group.invoice.file_replacement_pending) return [];
+    } else if (statusFilter === "replacement") {
+      if (!group.invoice || (!group.invoice.file_replacement_pending && group.invoice.lifecycle_status !== "CANCELLED")) return [];
+    }
+
     return [{ ...group, entries }];
-  }), [dateRange.from, dateRange.to, projectId, tableGroups]);
+  }), [dateRange.from, dateRange.to, projectId, statusFilter, tableGroups]);
   const flatTableRows = useMemo(() => filteredTableGroups.flatMap((group) => group.entries.map((entry, index) => ({
     key: `${group.key}:${entry.item.id}:${index}`,
     group,
@@ -247,7 +320,7 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify, navH
     if (groupsPage > displayedPageCount) setGroupsPage(displayedPageCount);
   }, [groupsPage, displayedPageCount]);
 
-  const hasActiveFilters = Boolean(search.trim() || supplierId || projectId
+  const hasActiveFilters = Boolean(search.trim() || supplierId || projectId || statusFilter
     || dateRange.from !== defaultDateRange.from || dateRange.to !== defaultDateRange.to);
 
   function toggleGroup(groupKey: string) {
@@ -296,12 +369,82 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify, navH
           <button type="button" aria-pressed={view === "flat"} onClick={() => { setView("flat"); setGroupsPage(1); }} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold ${view === "flat" ? "bg-white text-blue-700 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}><Table2 size={15} />Per barang</button>
         </div>
       </div>
+      <div className="flex max-w-full items-center gap-2 overflow-x-auto border-t border-slate-100 pt-2 pb-1">
+        <span className="shrink-0 text-xs font-semibold text-slate-500">Status Faktur</span>
+        <div role="group" aria-label="Filter status faktur" className="flex shrink-0 gap-1">
+          {[
+            { value: "", label: "Semua", count: statusCounts.all },
+            { value: "unlinked", label: "Tanpa Faktur", count: statusCounts.unlinked },
+            { value: "complete", label: "Faktur Lengkap", count: statusCounts.complete },
+            { value: "replacement", label: "Perlu Pengganti", count: statusCounts.replacement },
+          ].map((tab) => {
+            const active = statusFilter === tab.value;
+            return (
+              <button
+                key={tab.value || "all-status"}
+                type="button"
+                aria-pressed={active}
+                onClick={() => { setStatusFilter(tab.value as any); setGroupsPage(1); }}
+                className={`inline-flex items-center gap-1.5 shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                  active ? "bg-blue-700 text-white shadow-sm" : "text-blue-800 hover:bg-blue-50"
+                }`}
+              >
+                <span>{tab.label}</span>
+                <span className={`inline-flex items-center justify-center rounded-full px-1.5 py-0.2 text-[10px] font-bold ${
+                  active ? "bg-white/25 text-white" : "bg-blue-100 text-blue-800"
+                }`}>
+                  {tab.count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
       <div className="flex max-w-full items-center gap-2 overflow-x-auto border-t border-slate-100 pt-2 pb-0.5">
         <span className="shrink-0 text-xs font-semibold text-slate-500">Filter Project</span>
         <div role="group" aria-label="Filter project" className="flex shrink-0 gap-1">
-          {[{ value: "", label: "Semua project" }, ...projects.map((project) => ({ value: project.id, label: project.name })), { value: "none", label: "Tanpa project" }].map((tab) => <button key={tab.value || "all-projects"} type="button" aria-pressed={projectId === tab.value} onClick={() => { setProjectId(tab.value); setGroupsPage(1); }} className={`shrink-0 rounded-lg px-3.5 py-2 text-sm font-semibold transition ${projectId === tab.value ? "bg-blue-700 text-white shadow-sm" : "text-blue-800 hover:bg-blue-50"}`}>{tab.label}</button>)}
+          {[
+            { value: "", label: "Semua project", count: projectCounts.all },
+            ...projects.map((project) => ({ value: project.id, label: project.name, count: projectCounts.get(project.id) })),
+            { value: "none", label: "Tanpa project", count: projectCounts.none },
+          ].map((tab) => {
+            const active = projectId === tab.value;
+            return (
+              <button
+                key={tab.value || "all-projects"}
+                type="button"
+                aria-pressed={active}
+                onClick={() => { setProjectId(tab.value); setGroupsPage(1); }}
+                className={`inline-flex items-center gap-1.5 shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                  active ? "bg-blue-700 text-white shadow-sm" : "text-blue-800 hover:bg-blue-50"
+                }`}
+              >
+                <span>{tab.label}</span>
+                <span className={`inline-flex items-center justify-center rounded-full px-1.5 py-0.2 text-[10px] font-bold ${
+                  active ? "bg-white/25 text-white" : "bg-blue-100 text-blue-800"
+                }`}>
+                  {tab.count}
+                </span>
+              </button>
+            );
+          })}
         </div>
-        <button type="button" disabled={!hasActiveFilters} onClick={() => { setSearch(""); setSupplierId(""); setProjectId(""); setDateRange(defaultDateRange); setGroupsPage(1); }} className="inline-flex h-[42px] shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"><RotateCcw size={14} />Reset semua filter</button>
+        <button
+          type="button"
+          disabled={!hasActiveFilters}
+          onClick={() => {
+            setSearch("");
+            setSupplierId("");
+            setProjectId("");
+            setStatusFilter("");
+            setDateRange(defaultDateRange);
+            setGroupsPage(1);
+          }}
+          className="ml-auto inline-flex h-[34px] shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <RotateCcw size={13} />
+          Reset semua filter
+        </button>
       </div>
     </section>
     <ErrorBanner message={error instanceof Error ? error.message : null} />
