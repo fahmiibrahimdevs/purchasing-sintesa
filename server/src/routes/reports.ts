@@ -51,6 +51,23 @@ router.get("/dashboard-summary", async (c) => {
   const replacementPendingIds = new Set(replacementRows
     .filter((row) => cancelledAttachmentKeys.has(`${row.id}:${row.latest_attachment_id}`))
     .map((row) => String(row.id)));
+  const [missingAttachmentRows] = await pool.query(
+    `SELECT COUNT(*) AS total
+     FROM tax_invoices ti
+     WHERE ti.lifecycle_status NOT IN ('CANCELLED', 'REPLACED')
+       AND (
+         SELECT COUNT(*) FROM attachments att
+         WHERE att.tax_invoice_id = ti.id AND att.category = 'TAX_INVOICE_PDF'
+       ) = 0`
+  );
+  const invoicesWithoutAttachment = Number((missingAttachmentRows as any[])[0]?.total || 0);
+
+  const [cancelledInvoiceRows] = await pool.query(
+    `SELECT COUNT(*) AS total FROM tax_invoices WHERE lifecycle_status = 'CANCELLED'`
+  );
+  const cancelledInvoicesCount = Number((cancelledInvoiceRows as any[])[0]?.total || 0);
+  const totalReplacementPending = replacementPendingIds.size + cancelledInvoicesCount;
+
   const activeInvoiceStatuses = new Set(["RECEIVED", "UNDER_REVIEW", "VERIFIED"]);
   const activeMonthlyInvoices = (monthlyInvoiceDetailRows as any[]).filter((row) =>
     activeInvoiceStatuses.has(String(row.lifecycle_status)) && !replacementPendingIds.has(String(row.id)));
@@ -98,7 +115,7 @@ router.get("/dashboard-summary", async (c) => {
   const invoiceRequiredItems = allItems.filter((item) => item.invoice_requirement === "REQUIRED");
   const missingInvoiceFileItems = invoiceRequiredItems.filter((item) => !Boolean(item.has_uploaded_invoice));
   const pending = allItems.filter((item) => item.invoice_requirement !== "NOT_REQUIRED"
-    && ["WAITING", "PARTIAL", "UNDER_REVIEW", "NEEDS_REVIEW"].includes(item.coverage_status));
+    && item.coverage_status === "WAITING");
   const statusCounts = (invoiceRows as any[]).reduce((acc, row) => ({ ...acc, [row.lifecycle_status]: Number(row.total) }), {});
   return c.json({
     purchase_documents_this_month: Number((purchaseRows as any[])[0]?.document_count || 0),
@@ -119,13 +136,13 @@ router.get("/dashboard-summary", async (c) => {
     invoice_status_counts: statusCounts,
     active_invoices_this_month: activeMonthlyInvoices.length,
     active_invoice_ppn_this_month: activeMonthlyInvoices.reduce((sum, row) => sum + Number(row.ppn_amount || 0), 0),
-    replacement_invoices_pending: replacementPendingIds.size,
+    replacement_invoices_pending: totalReplacementPending,
+    invoices_without_attachment: invoicesWithoutAttachment,
     total_items: allItems.length,
     items_requiring_invoice: invoiceRequiredItems.length,
     missing_invoice_file_items: missingInvoiceFileItems.length,
     pending_items: pending.length,
-    partial_items: pending.filter((item) => item.coverage_status === "PARTIAL").length,
-    needs_review_items: pending.filter((item) => item.coverage_status === "NEEDS_REVIEW").length,
+    partial_items: 0,
   });
 });
 
@@ -249,7 +266,7 @@ router.get("/reports/pending", allowRoles("TAX_STAFF", "ADMIN"), async (c) => {
   );
   const allItems = await itemsForDocuments((docRows as any[]).map((row) => row.id));
   const filtered = allItems.filter((item) => item.invoice_requirement !== "NOT_REQUIRED"
-    && ["WAITING", "PARTIAL", "UNDER_REVIEW", "NEEDS_REVIEW"].includes(item.coverage_status)
+    && item.coverage_status === "WAITING"
     && (!projectId || item.project_id === projectId));
   const start = (page - 1) * pageSize;
   return c.json({ data: filtered.slice(start, start + pageSize), page, pageSize, total: filtered.length, totalPages: Math.ceil(filtered.length / pageSize) });

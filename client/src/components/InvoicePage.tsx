@@ -8,7 +8,14 @@ import { InvoiceLink, Project, PurchaseItem, Supplier, TaxInvoice, User } from "
 import { Button, EmptyState, ErrorBanner, Field, inputClass, LoadingState, Modal, SectionHeading, StatusBadge, SummaryCards } from "./common";
 import { SearchableSelect } from "./SearchableSelect";
 
-type Props = { user: User; onCreateInvoice: (item?: PurchaseItem) => void; onEditInvoice: (invoiceId: string) => void; notify: (message: string, kind?: "success" | "error") => void };
+type Props = {
+  user: User;
+  onCreateInvoice: (item?: PurchaseItem) => void;
+  onEditInvoice: (invoiceId: string) => void;
+  notify: (message: string, kind?: "success" | "error") => void;
+  navHighlight?: { q?: string; highlightId?: string } | null;
+  onClearNavHighlight?: () => void;
+};
 type InvoiceTableEntry = { item: PurchaseItem; quantity: number; dpp: number; ppn: number; total: number };
 type InvoiceTableGroup = { key: string; invoice?: InvoiceLink; purchaseDate: string; purchaseGroupCode: string; supplierName: string; entries: InvoiceTableEntry[] };
 type InvoiceTableRow = { key: string; group: InvoiceTableGroup; entry: InvoiceTableEntry };
@@ -66,7 +73,7 @@ function isValidTaxPeriod(year: string, month: string) {
     && Number.isInteger(numericMonth) && numericMonth >= 1 && numericMonth <= 12;
 }
 
-export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify }: Props) {
+export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify, navHighlight, onClearNavHighlight }: Props) {
   const defaultDateRange = useMemo(() => thisMonthDateRange(), []);
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search.trim());
@@ -80,6 +87,12 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify }: Pr
   const [previewFile, setPreviewFile] = useState<InvoiceFilePreview | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set());
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    if (navHighlight?.q) {
+      setSearch(navHighlight.q);
+    }
+  }, [navHighlight?.q]);
   const params = new URLSearchParams();
   if (debouncedSearch) params.set("q", debouncedSearch);
   if (supplierId) params.set("supplierId", supplierId);
@@ -196,6 +209,24 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify }: Pr
   const currentGroupsPage = Math.min(groupsPage, displayedPageCount);
   const pageTableGroups = useMemo(() => filteredTableGroups.slice((currentGroupsPage - 1) * groupsPageSize, currentGroupsPage * groupsPageSize), [currentGroupsPage, filteredTableGroups, groupsPageSize]);
   const pageTableRows = useMemo(() => flatTableRows.slice((currentGroupsPage - 1) * groupsPageSize, currentGroupsPage * groupsPageSize), [currentGroupsPage, flatTableRows, groupsPageSize]);
+
+  useEffect(() => {
+    if (!navHighlight?.highlightId) return;
+    const targetId = `row-${navHighlight.highlightId}`;
+    const timer = setTimeout(() => {
+      const el = document.getElementById(targetId);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("ring-4", "ring-amber-400", "bg-amber-100", "transition-all", "duration-500");
+        const clearTimer = setTimeout(() => {
+          el.classList.remove("ring-4", "ring-amber-400", "bg-amber-100");
+          onClearNavHighlight?.();
+        }, 4000);
+        return () => clearTimeout(clearTimer);
+      }
+    }, 450);
+    return () => clearTimeout(timer);
+  }, [navHighlight?.highlightId, items, filteredTableGroups]);
   const groupPageNumbers = useMemo(() => {
     if (displayedPageCount <= 7) return Array.from({ length: displayedPageCount }, (_, index) => index + 1);
     const candidates = Array.from(new Set([1, 2, currentGroupsPage - 1, currentGroupsPage, currentGroupsPage + 1, displayedPageCount - 1, displayedPageCount]))
@@ -246,9 +277,9 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify }: Pr
   return <div>
     <SectionHeading title="Faktur Pajak" description="Pantau barang wajib faktur dan kelengkapan faktur pada setiap nota pembelian." action={canWork ? <Button onClick={() => onCreateInvoice()}><Plus size={16} />Input Faktur</Button> : undefined} />
     <SummaryCards cards={[
-      { label: "Faktur tercatat bulan ini", value: invoiceSummary?.active_invoices_this_month ?? 0, unit: "faktur", detail: "Jumlah faktur aktif bertanggal bulan ini", icon: ReceiptText, tone: "blue", loading: invoiceSummaryLoading },
-      { label: "Nilai PPN bulan ini", value: money(invoiceSummary?.active_invoice_ppn_this_month), detail: "Total PPN pada faktur aktif bulan ini", icon: CircleDollarSign, tone: "emerald", loading: invoiceSummaryLoading },
-      { label: "Barang belum punya faktur", value: itemsWithoutInvoice, unit: "barang", detail: "Barang wajib faktur yang belum tertaut", icon: FileWarning, tone: "amber", loading: coverageLoading },
+      { label: "Faktur tercatat bulan ini", value: invoiceSummary?.active_invoices_this_month ?? 0, unit: "faktur", detail: "Jumlah faktur bertanggal bulan ini", icon: ReceiptText, tone: "blue", loading: invoiceSummaryLoading },
+      { label: "Nilai PPN bulan ini", value: money(invoiceSummary?.active_invoice_ppn_this_month), detail: "Total PPN faktur bulan ini", icon: CircleDollarSign, tone: "emerald", loading: invoiceSummaryLoading },
+      { label: "Barang belum ada faktur", value: itemsWithoutInvoice, unit: "barang", detail: "Barang wajib faktur yang belum tertaut", icon: FileWarning, tone: "amber", loading: coverageLoading },
       { label: "Menunggu faktur pengganti", value: invoiceSummary?.replacement_invoices_pending ?? 0, unit: "faktur", detail: "Versi terakhir dibatalkan dan belum diganti", icon: FileClock, tone: "violet", loading: invoiceSummaryLoading },
     ]} />
     <section className="mb-4 space-y-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-card">
@@ -281,7 +312,7 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify }: Pr
         const canDelete = invoice?.lifecycle_status === "DRAFT";
         const canEdit = Boolean(invoice && canWork && !["CANCELLED", "REPLACED"].includes(invoice.lifecycle_status));
         const unitPrice = entry.quantity > 0 ? entry.dpp / entry.quantity : Number(item.unit_price || 0);
-        return <tr key={key} className="transition hover:bg-slate-50/70">
+        return <tr key={key} id={`row-item-${item.id}`} className="transition hover:bg-slate-50/70">
           <td className="whitespace-nowrap px-3 py-2.5 text-slate-600">{dateText(invoice?.invoice_date || item.purchase_date || group.purchaseDate)}</td>
           <td className="whitespace-nowrap px-3 py-2.5">{invoice ? <button type="button" onClick={() => setSelectedInvoiceId(invoice.id)} className="font-medium text-blue-700 hover:text-blue-900 hover:underline">{invoice.nsfp}</button> : <span className="text-slate-400">—</span>}</td>
           <td className="whitespace-nowrap px-3 py-2.5">{group.supplierName}</td>
@@ -305,7 +336,7 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify }: Pr
         const canDelete = invoice?.lifecycle_status === "DRAFT";
         const canEdit = Boolean(invoice && canWork && !["CANCELLED", "REPLACED"].includes(invoice.lifecycle_status));
         return <Fragment key={group.key}>
-          <tr className="bg-white">
+          <tr id={invoice ? `row-invoice-${invoice.id}` : undefined} className="bg-white">
             <td colSpan={8} className="border-t border-slate-200 px-4 py-2.5">
               <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
                 <div className="flex min-w-0 items-center gap-3">
@@ -327,7 +358,7 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify }: Pr
               : "bottom-[-11px]";
             const elbowWidth = isLast ? "w-2" : "w-4";
             const unitPrice = entry.quantity > 0 ? entry.dpp / entry.quantity : Number(item.unit_price || 0);
-            return <tr key={`${group.key}:${item.id}:${index}`} className="bg-white transition hover:bg-slate-50/70">
+            return <tr key={`${group.key}:${item.id}:${index}`} id={`row-item-${item.id}`} className="bg-white transition hover:bg-slate-50/70">
               <td className="whitespace-normal break-words px-3 py-2 align-middle"><div className="relative flex min-h-8 items-center pl-9"><span aria-hidden="true" className={`absolute left-[13px] ${connectorStart} border-l border-slate-300 ${connectorEnd}`} /><span aria-hidden="true" className={`absolute left-[13px] top-1/2 h-2 ${elbowWidth} -translate-y-full rounded-bl-lg border-b border-l border-slate-300`} /><span className="text-slate-700">{item.project_name || "Tanpa project"}</span></div></td>
               <td className="whitespace-normal break-words px-3 py-2 align-middle"><span className="font-medium text-slate-900">{item.item_name}</span></td>
               <td className="whitespace-nowrap px-3 py-2 text-right align-middle tabular-nums">{quantityText(entry.quantity)}</td>

@@ -25,11 +25,11 @@ export async function itemsForDocuments(documentIds: string[], includeInvoiceAtt
   const placeholders = documentIds.map(() => "?").join(",");
   const [rows] = await pool.execute(
     `SELECT pi.*, pr.name AS project_name, d.purchase_group_code, d.supplier_document_no, d.purchase_date, d.supplier_id, s.name AS supplier_name,
-       (SELECT COALESCE(SUM(COALESCE(a.allocated_quantity, pi.quantity)),0) FROM tax_invoice_purchase_allocations a JOIN tax_invoice_lines tl ON tl.id=a.tax_invoice_line_id JOIN tax_invoices ti ON ti.id=tl.tax_invoice_id WHERE a.purchase_item_id=pi.id AND ti.lifecycle_status='VERIFIED') AS active_quantity,
-       (SELECT COALESCE(SUM(a.allocated_dpp),0) FROM tax_invoice_purchase_allocations a JOIN tax_invoice_lines tl ON tl.id=a.tax_invoice_line_id JOIN tax_invoices ti ON ti.id=tl.tax_invoice_id WHERE a.purchase_item_id=pi.id AND ti.lifecycle_status='VERIFIED') AS active_dpp,
-       (SELECT COALESCE(SUM(COALESCE(a.allocated_quantity, pi.quantity)),0) FROM tax_invoice_purchase_allocations a JOIN tax_invoice_lines tl ON tl.id=a.tax_invoice_line_id JOIN tax_invoices ti ON ti.id=tl.tax_invoice_id WHERE a.purchase_item_id=pi.id AND ti.lifecycle_status IN ('DRAFT','RECEIVED','UNDER_REVIEW')) AS reserved_quantity,
-       (SELECT COALESCE(SUM(a.allocated_dpp),0) FROM tax_invoice_purchase_allocations a JOIN tax_invoice_lines tl ON tl.id=a.tax_invoice_line_id JOIN tax_invoices ti ON ti.id=tl.tax_invoice_id WHERE a.purchase_item_id=pi.id AND ti.lifecycle_status IN ('DRAFT','RECEIVED','UNDER_REVIEW')) AS reserved_dpp,
-       (SELECT COUNT(DISTINCT ti.id) FROM tax_invoice_purchase_allocations a JOIN tax_invoice_lines tl ON tl.id=a.tax_invoice_line_id JOIN tax_invoices ti ON ti.id=tl.tax_invoice_id WHERE a.purchase_item_id=pi.id AND ti.lifecycle_status IN ('RECEIVED','UNDER_REVIEW')) AS pending_count,
+       (SELECT COALESCE(SUM(COALESCE(a.allocated_quantity, pi.quantity)),0) FROM tax_invoice_purchase_allocations a JOIN tax_invoice_lines tl ON tl.id=a.tax_invoice_line_id JOIN tax_invoices ti ON ti.id=tl.tax_invoice_id WHERE a.purchase_item_id=pi.id AND ti.lifecycle_status NOT IN ('CANCELLED','REPLACED')) AS active_quantity,
+       (SELECT COALESCE(SUM(a.allocated_dpp),0) FROM tax_invoice_purchase_allocations a JOIN tax_invoice_lines tl ON tl.id=a.tax_invoice_line_id JOIN tax_invoices ti ON ti.id=tl.tax_invoice_id WHERE a.purchase_item_id=pi.id AND ti.lifecycle_status NOT IN ('CANCELLED','REPLACED')) AS active_dpp,
+       0 AS reserved_quantity,
+       0 AS reserved_dpp,
+       0 AS pending_count,
        EXISTS (
          SELECT 1
          FROM tax_invoice_purchase_allocations a
@@ -346,7 +346,7 @@ router.get("/purchase-items/queue", allowRoles("TAX_STAFF", "ADMIN"), async (c) 
   const projectId = c.req.query("projectId");
   const [docRows] = await pool.query("SELECT id FROM purchase_documents WHERE record_status<>'CANCELLED'");
   const docs = await itemsForDocuments((docRows as any[]).map((row) => row.id), true);
-  const filtered = docs.filter((item) => ["WAITING", "PARTIAL", "UNDER_REVIEW", "NEEDS_REVIEW"].includes(item.coverage_status)
+  const filtered = docs.filter((item) => item.coverage_status === "WAITING"
     && (item.invoice_requirement !== "NOT_REQUIRED")
     && (!supplierId || item.supplier_id === supplierId)
     && (!projectId || item.project_id === projectId)

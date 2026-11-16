@@ -61,9 +61,9 @@ export function Modal({ title, subtitle, onClose, children, size = "max-w-3xl" }
 
 const statusColors: Record<string, string> = {
   DRAFT: "bg-slate-100 text-slate-700", POSTED: "bg-blue-50 text-blue-700", CANCELLED: "bg-rose-50 text-rose-700",
-  REQUIRED: "bg-blue-50 text-blue-700", NOT_REQUIRED: "bg-slate-100 text-slate-600", UNDETERMINED: "bg-orange-50 text-orange-700",
-  WAITING: "bg-amber-50 text-amber-700", PARTIAL: "bg-orange-50 text-orange-700", UNDER_REVIEW: "bg-amber-50 text-amber-700",
-  NEEDS_REVIEW: "bg-rose-50 text-rose-700", COMPLETE: "bg-emerald-50 text-emerald-700", NOT_REQUIRED_COVERAGE: "bg-slate-100 text-slate-700",
+  REQUIRED: "bg-blue-50 text-blue-700", NOT_REQUIRED: "bg-slate-100 text-slate-600",
+  WAITING: "bg-amber-50 text-amber-700", UNDER_REVIEW: "bg-amber-50 text-amber-700",
+  COMPLETE: "bg-emerald-50 text-emerald-700", NOT_REQUIRED_COVERAGE: "bg-slate-100 text-slate-700",
   RECORDED: "bg-blue-50 text-blue-700",
   RECEIVED: "bg-amber-50 text-amber-700", VERIFIED: "bg-emerald-50 text-emerald-700", REPLACED: "bg-slate-100 text-slate-700",
   SUPERSEDED: "bg-slate-100 text-slate-600", FILE_REPLACEMENT_PENDING: "bg-amber-50 text-amber-800",
@@ -71,14 +71,14 @@ const statusColors: Record<string, string> = {
 };
 const statusLabels: Record<string, string> = {
   DRAFT: "Draft", POSTED: "Diposting", CANCELLED: "Dibatalkan", REQUIRED: "Faktur", NOT_REQUIRED: "Non faktur",
-  UNDETERMINED: "Belum ditentukan", WAITING: "Menunggu", PARTIAL: "Sebagian",
-  NEEDS_REVIEW: "Perlu pemeriksaan", COMPLETE: "Lengkap", RECEIVED: "Menunggu verifikasi", VERIFIED: "Diverifikasi", REPLACED: "Digantikan", UNDER_REVIEW: "Menunggu verifikasi",
+  WAITING: "Belum ada faktur",
+  COMPLETE: "Lengkap", RECEIVED: "Tercatat", VERIFIED: "Tercatat", REPLACED: "Digantikan", UNDER_REVIEW: "Belum ada faktur",
   SUPERSEDED: "Digantikan", FILE_REPLACEMENT_PENDING: "Menunggu faktur pengganti",
   RECORDED: "Tercatat",
   ACTIVE: "Aktif", INACTIVE: "Nonaktif",
 };
 export function StatusBadge({ value }: { value?: string }) {
-  const key = String(value || "NEEDS_REVIEW").toUpperCase();
+  const key = String(value || "WAITING").toUpperCase();
   const colorKey = key === "NOT_REQUIRED" ? "NOT_REQUIRED_COVERAGE" : key;
   return <span className={`inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium ${statusColors[colorKey] || "bg-slate-100 text-slate-700"}`}>{statusLabels[key] || key.replace(/_/g, " ")}</span>;
 }
@@ -97,7 +97,18 @@ export function SectionHeading({ title, description, action }: { title: string; 
   </div>;
 }
 
-export type SummaryCardData = { label: string; value: React.ReactNode; unit?: string; detail?: React.ReactNode; icon: LucideIcon; tone?: "blue" | "amber" | "violet" | "emerald" | "orange"; loading?: boolean };
+export type SummaryCardData = {
+  label: string;
+  value: React.ReactNode;
+  unit?: string;
+  detail?: React.ReactNode;
+  icon: LucideIcon;
+  tone?: "blue" | "amber" | "violet" | "emerald" | "orange";
+  loading?: boolean;
+  onReview?: () => void;
+  reviewLabel?: string;
+  badge?: React.ReactNode;
+};
 
 export function SummaryCards({ cards, columns = 4, autoFit = false }: { cards: SummaryCardData[]; columns?: 2 | 3 | 4; autoFit?: boolean }) {
   const tones = {
@@ -108,9 +119,39 @@ export function SummaryCards({ cards, columns = 4, autoFit = false }: { cards: S
     orange: "bg-orange-500 text-white shadow-orange-100",
   };
   const columnClass = columns === 2 ? "sm:grid-cols-2 xl:grid-cols-2" : columns === 3 ? "sm:grid-cols-2 xl:grid-cols-3" : "sm:grid-cols-2 xl:grid-cols-4";
-  return <div className={`mb-5 grid gap-3 ${autoFit ? "" : columnClass}`} style={autoFit ? { gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))" } : undefined}>{cards.map((card) => <article key={card.label} className="flex min-h-[88px] min-w-0 items-center gap-3 rounded-2xl border border-slate-200 bg-white px-3.5 py-3 shadow-card">
-    <span className={`grid h-11 w-11 shrink-0 place-items-center rounded-xl shadow-sm ${tones[card.tone || "blue"]}`}><card.icon size={20} /></span>
-    <div className="min-w-0"><p className="text-xs font-semibold text-slate-600">{card.label}</p><div className="mt-0.5 flex min-h-6 items-center gap-1.5">{card.loading ? <Skeleton className="h-4 w-10" /> : <><span className="truncate text-lg font-bold leading-6 text-slate-900">{card.value}</span>{card.unit && <span className="shrink-0 text-xs text-slate-500">{card.unit}</span>}</>}</div><p className="truncate text-[11px] text-slate-500">{card.loading ? <Skeleton className="h-3 w-28" /> : card.detail}</p></div>
+  return <div className={`mb-5 grid gap-3 ${autoFit ? "" : columnClass}`} style={autoFit ? { gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))" } : undefined}>{cards.map((card) => <article key={card.label} className="relative flex min-h-[88px] min-w-0 items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-3.5 py-3 shadow-card">
+    <div className="flex min-w-0 items-center gap-3">
+      <span className={`grid h-11 w-11 shrink-0 place-items-center rounded-xl shadow-sm ${tones[card.tone || "blue"]}`}><card.icon size={20} /></span>
+      <div className="min-w-0">
+        <p className="text-xs font-semibold text-slate-600">{card.label}</p>
+        <div className="mt-0.5 flex min-h-6 items-center gap-1.5">
+          {card.loading ? <Skeleton className="h-4 w-10" /> : <><span className="truncate text-lg font-bold leading-6 text-slate-900">{card.value}</span>{card.unit && <span className="shrink-0 text-xs text-slate-500">{card.unit}</span>}</>}
+        </div>
+        <p className="truncate text-[11px] text-slate-500">
+          {card.loading ? <Skeleton className="h-3 w-28" /> : (
+            <>
+              <span>{card.detail}</span>
+              {card.onReview && (
+                <>
+                  <span className="mx-1 text-slate-300">·</span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      card.onReview?.();
+                    }}
+                    className="font-bold text-blue-700 hover:text-blue-800 hover:underline cursor-pointer"
+                  >
+                    {card.reviewLabel || "Tinjau"}
+                  </button>
+                </>
+              )}
+            </>
+          )}
+        </p>
+      </div>
+    </div>
+    {card.badge && <div className="shrink-0 pl-1">{card.badge}</div>}
   </article>)}</div>;
 }
 

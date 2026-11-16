@@ -32,7 +32,7 @@ export type InvoiceLine = { id: string; line_no: number; description: string; qu
 export type TaxInvoice = {
   id: string; supplier_id: string; supplier_name: string; nsfp: string; invoice_date: string; tax_period_year: number;
   tax_period_month: number; dpp_amount: string | number; ppn_amount: string | number; other_tax_amount: string | number;
-  invoice_total: string | number; invoice_kind: string; replaces_tax_invoice_id?: string | null; lifecycle_status: string; file_replacement_pending?: boolean; replacement_invoice_id?: string | null; replacement_nsfp?: string | null; replacement_lifecycle_status?: string | null;
+  invoice_total: string | number; invoice_kind: string; replaces_tax_invoice_id?: string | null; lifecycle_status: string; file_replacement_pending?: boolean; replacement_invoice_id?: string | null; replacement_nsfp?: string | null; replacement_lifecycle_status?: string | null; latest_attachment_id?: string | null;
   lines?: InvoiceLine[]; events?: Array<{ id: string; event_type: string; event_at: string; actor_name: string; reason?: string }>;
   attachments?: Array<{ id: string; tax_invoice_id?: string; category: string; original_filename: string; mime_type: string; file_size: number; uploaded_at?: string; uploaded_by?: string; uploaded_by_name?: string; supersedes_attachment_id?: string | null; revision_reason?: string | null; version_nsfp?: string; version_invoice_date?: string; version_status?: string; version_number?: number | null; cancellation_reason?: string | null; cancelled_at?: string | null; cancelled_by_name?: string | null }>;
 };

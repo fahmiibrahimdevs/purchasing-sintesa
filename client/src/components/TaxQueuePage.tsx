@@ -22,11 +22,9 @@ export function TaxQueuePage({ user, onCreateInvoice, notify }: Props) {
   return <div>
     <SectionHeading title="Antrean Faktur" description="Prioritaskan barang yang belum atau baru sebagian tercakup faktur." />
     <SummaryCards cards={[
-      { label: "Dalam antrean", value: items.length, unit: "barang", detail: "Belum lengkap atau perlu review", icon: PackageCheck, tone: "blue", loading: isLoading },
-      { label: "Sebagian tercakup", value: items.filter((x) => x.coverage_status === "PARTIAL").length, unit: "barang", detail: "Masih ada nilai yang belum tercakup", icon: Clock3, tone: "amber", loading: isLoading },
-      { label: "Perlu pemeriksaan", value: items.filter((x) => x.coverage_status === "NEEDS_REVIEW").length, unit: "barang", detail: "Jenis faktur belum dipastikan", icon: CircleAlert, tone: "violet", loading: isLoading },
-      { label: "Menunggu tindak lanjut", value: items.filter((x) => ["WAITING", "UNDER_REVIEW"].includes(x.coverage_status || "")).length, unit: "barang", detail: "Menunggu supplier atau verifikasi", icon: MessageSquarePlus, tone: "emerald", loading: isLoading },
-    ]} />
+      { label: "Dalam antrean", value: items.length, unit: "barang", detail: "Belum lengkap faktur", icon: PackageCheck, tone: "blue", loading: isLoading },
+      { label: "Menunggu tindak lanjut", value: items.filter((x) => ["WAITING", "UNDER_REVIEW"].includes(x.coverage_status || "")).length, unit: "barang", detail: "Menunggu faktur dari supplier", icon: MessageSquarePlus, tone: "emerald", loading: isLoading },
+    ]} columns={2} />
     <div className="mb-4 grid gap-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-card md:grid-cols-[1fr_220px_220px]">
       <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} /><input className={`${inputClass} pl-9`} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari item, supplier, kode kelompok…" /></div>
       <SearchableSelect className={inputClass} value={supplierId} placeholder="Semua supplier" searchPlaceholder="Cari supplier…" options={suppliers.filter((s) => s.is_active).map((s) => ({ value: s.id, label: s.name, sublabel: s.supplier_code }))} onChange={setSupplierId} />

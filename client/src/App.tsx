@@ -49,6 +49,7 @@ function Workspace() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [masterDataOpen, setMasterDataOpen] = useState(false);
+  const [navHighlight, setNavHighlight] = useState<{ q?: string; highlightId?: string } | null>(null);
 
   useEffect(() => { api<User>("/api/auth/me").then(setUser).catch(() => setUser(null)).finally(() => setAuthLoading(false)); }, []);
   useEffect(() => {
@@ -72,12 +73,15 @@ function Workspace() {
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [sidebarOpen]);
   const notify = (message: string, kind: "success" | "error" = "success") => { void showToast(message, kind); };
-  const navigate = (target: string, replace = false) => {
+  const navigate = (target: string, options?: { q?: string; highlightId?: string } | boolean, maybeOptions?: { q?: string; highlightId?: string }) => {
     if (!pages.includes(target as Page)) return;
     const nextPage = target as Page;
     if (user && !canAccessPage(user.role, nextPage)) return;
     if (nextPage !== "invoice-new") setReplacementInvoiceId("");
     setPage(nextPage);
+    const replace = typeof options === "boolean" ? options : false;
+    const navOpts = typeof options === "object" && options !== null ? options : maybeOptions || null;
+    setNavHighlight(navOpts);
     const routeHash = nextPage === "invoice-new" ? "invoices/new" : nextPage;
     const nextUrl = `${window.location.pathname}${window.location.search}${nextPage === "dashboard" ? "" : `#${routeHash}`}`;
     if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== nextUrl) {
@@ -151,8 +155,8 @@ function Workspace() {
       <div className="sticky top-[70px] z-20 flex min-h-[72px] items-center justify-between gap-4 border-b border-slate-200 bg-white px-4 py-3 shadow-sm sm:px-6 lg:px-8"><h1 className="text-lg font-semibold text-slate-800">{pageLabel}</h1><div className="flex shrink-0 items-center gap-2 text-[11px] text-slate-500"><span className="text-blue-700">Dashboard</span><span>/</span><span>{pageLabel === "Dashboard" ? "Utama" : pageLabel}</span></div></div>
       <div className="mx-auto flex min-h-[calc(100vh-142px)] w-full max-w-[2304px] flex-col"><main className="w-full min-w-0 flex-1 px-3 py-5 sm:px-6 sm:py-7 2xl:px-10">
         {page === "dashboard" && <DashboardPage user={user} onNavigate={navigate} />}
-        {page === "purchases" && <PurchasePage user={user} notify={notify} />}
-        {page === "invoices" && <InvoicePage user={user} notify={notify} onCreateInvoice={(item) => { setReplacementInvoiceId(""); setInitialInvoiceItem(item || null); navigate("invoice-new"); }} onEditInvoice={(id) => { setReplacementInvoiceId(""); setEditingInvoiceId(id); setPage("invoice-edit"); window.history.pushState({}, "", `${window.location.pathname}${window.location.search}#invoices/edit/${id}`); }} />}
+        {page === "purchases" && <PurchasePage user={user} notify={notify} navHighlight={navHighlight} onClearNavHighlight={() => setNavHighlight(null)} />}
+        {page === "invoices" && <InvoicePage user={user} notify={notify} navHighlight={navHighlight} onClearNavHighlight={() => setNavHighlight(null)} onCreateInvoice={(item) => { setReplacementInvoiceId(""); setInitialInvoiceItem(item || null); navigate("invoice-new"); }} onEditInvoice={(id) => { setReplacementInvoiceId(""); setEditingInvoiceId(id); setPage("invoice-edit"); window.history.pushState({}, "", `${window.location.pathname}${window.location.search}#invoices/edit/${id}`); }} />}
         {page === "invoice-new" && <InvoiceCreatePage initialItem={initialInvoiceItem} replacementInvoiceId={replacementInvoiceId} userName={user.name} notify={notify} onBack={() => { setInitialInvoiceItem(null); setReplacementInvoiceId(""); navigate("invoices"); }} />}
         {page === "invoice-edit" && <InvoiceEditPage invoiceId={editingInvoiceId} userName={user.name} notify={notify} onBack={() => navigate("invoices")} onCreateReplacement={(id) => { setInitialInvoiceItem(null); setReplacementInvoiceId(id); setPage("invoice-new"); window.history.pushState({}, "", `${window.location.pathname}${window.location.search}#invoices/new?replacement=${encodeURIComponent(id)}`); }} />}
         {(page === "suppliers" || page === "projects") && <MasterDataPage section={page} user={user} notify={notify} />}

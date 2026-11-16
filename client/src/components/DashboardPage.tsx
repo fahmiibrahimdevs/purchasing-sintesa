@@ -1,11 +1,21 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { BarChart3, ClipboardList, FileCheck2, ReceiptText, ShoppingBag, TrendingUp } from "lucide-react";
+import { BarChart3, CheckCircle2, ClipboardList, Clock, FileCheck2, FileClock, FileUp, FileWarning, Hourglass, ReceiptText, ShoppingBag, TrendingUp } from "lucide-react";
 import { api, money, monthText } from "../lib/api";
 import { User } from "../types";
 import { Button, EmptyState, ErrorBanner, LoadingState, SectionHeading, SummaryCards } from "./common";
+import { TaskReviewModal, TaskReviewType } from "./TaskReviewModal";
 
-type Props = { user: User; onNavigate: (page: string) => void };
-type Summary = { purchase_documents_this_month: number; purchase_value_this_month: number };
+type Props = { user: User; onNavigate: (page: string, options?: { q?: string; highlightId?: string }) => void };
+type Summary = {
+  purchase_documents_this_month: number;
+  purchase_value_this_month: number;
+  pending_items: number;
+  partial_items: number;
+  invoices_without_attachment?: number;
+  replacement_invoices_pending?: number;
+  invoice_status_counts: Record<string, number>;
+};
 type MonthlyPurchase = { month: number; invoice_dpp_total: number; non_invoice_dpp_total: number; unclassified_dpp_total: number; ppn_total: number; purchase_total: number };
 type ProjectPurchase = { project_id: string | null; project_name: string; monthly_totals: number[]; annual_total: number };
 type PurchaseAnalytics = { year: number; months: MonthlyPurchase[]; projects: ProjectPurchase[] };
@@ -174,16 +184,95 @@ export function DashboardPage({ user, onNavigate }: Props) {
     { key: "non_invoice_dpp_total", label: "Non Faktur", color: "#059669" },
     ...(hasUnclassified ? [{ key: "unclassified_dpp_total" as const, label: "Belum ditetapkan", color: "#94a3b8" }] : []),
   ];
+  const [reviewModal, setReviewModal] = useState<TaskReviewType | null>(null);
   const summaryCardsLoading = isLoading || analyticsLoading;
-  const cards = [
-    { label: "Pembelian bulan ini", value: analytics ? money(currentMonth?.purchase_total ?? 0) : "—", icon: ShoppingBag, tone: "blue" as const, detail: summary ? `${summary.purchase_documents_this_month} dokumen` : "Total transaksi" , loading: summaryCardsLoading },
+
+  const taskCards = [
+    {
+      label: "Barang belum ada faktur",
+      value: summary ? summary.pending_items : "—",
+      unit: "barang",
+      icon: FileWarning,
+      tone: "amber" as const,
+      detail: "Belum memiliki faktur pajak",
+      loading: isLoading,
+      onReview: () => setReviewModal("pending"),
+      badge: <span className="grid h-8 w-8 place-items-center rounded-lg bg-amber-50 text-amber-600"><Hourglass size={16} /></span>,
+    },
+    {
+      label: "Faktur belum ada lampiran",
+      value: summary ? (summary.invoices_without_attachment ?? 0) : "—",
+      unit: "faktur",
+      icon: FileUp,
+      tone: "orange" as const,
+      detail: "File PDF belum diunggah",
+      loading: isLoading,
+      onReview: () => setReviewModal("missing_file"),
+      badge: <span className="grid h-8 w-8 place-items-center rounded-lg bg-orange-50 text-orange-600"><FileUp size={16} /></span>,
+    },
+    {
+      label: "Menunggu faktur pengganti",
+      value: summary ? (summary.replacement_invoices_pending ?? 0) : "—",
+      unit: "faktur",
+      icon: FileClock,
+      tone: "violet" as const,
+      detail: "Faktur revisi dari supplier",
+      loading: isLoading,
+      onReview: () => setReviewModal("replacement_pending"),
+      badge: <span className="grid h-8 w-8 place-items-center rounded-lg bg-violet-50 text-violet-600"><FileClock size={16} /></span>,
+    },
+    {
+      label: "Faktur tercatat bulan ini",
+      value: summary ? (summary.invoice_status_counts?.VERIFIED ?? 0) : "—",
+      unit: "faktur",
+      icon: FileCheck2,
+      tone: "emerald" as const,
+      detail: "Sudah selesai diinput",
+      loading: isLoading,
+      onReview: () => setReviewModal("verified"),
+      badge: <span className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-50 text-emerald-600"><CheckCircle2 size={16} /></span>,
+    },
+  ];
+
+  const financialCards = [
+    { label: "Pembelian bulan ini", value: analytics ? money(currentMonth?.purchase_total ?? 0) : "—", icon: ShoppingBag, tone: "blue" as const, detail: summary ? `${summary.purchase_documents_this_month} dokumen` : "Total transaksi", loading: summaryCardsLoading },
     { label: "Pembelian faktur bulan ini", value: analytics ? money(currentMonth?.invoice_dpp_total ?? 0) : "—", icon: FileCheck2, tone: "emerald" as const, detail: "Sebelum PPN (DPP)", loading: summaryCardsLoading },
     { label: "Pembelian non faktur bulan ini", value: analytics ? money(currentMonth?.non_invoice_dpp_total ?? 0) : "—", icon: ClipboardList, tone: "orange" as const, detail: "Tanpa faktur pajak", loading: summaryCardsLoading },
     { label: "PPN bulan ini", value: analytics ? money(currentMonth?.ppn_total ?? 0) : "—", icon: TrendingUp, tone: "violet" as const, detail: "PPN pembelian faktur", loading: summaryCardsLoading },
   ];
 
-  return <div><SectionHeading title={`Selamat datang, ${user.name.split(" ")[0]}`} description="Ringkasan operasional pembelian dan faktur untuk periode berjalan." action={user.role === "PURCHASING" || user.role === "ADMIN" ? <Button onClick={() => onNavigate("purchases")}><ShoppingBag size={16} />Buka Pembelian</Button> : <Button onClick={() => onNavigate("invoices")}><ReceiptText size={16} />Buka Faktur Pajak</Button>} />
-    <SummaryCards cards={cards} />
+  return <div>
+    <SectionHeading
+      title={`Selamat datang, ${user.name.split(" ")[0]}`}
+      description="Ringkasan operasional pembelian dan faktur untuk periode berjalan."
+      action={user.role === "PURCHASING" || user.role === "ADMIN" ? <Button onClick={() => onNavigate("purchases")}><ShoppingBag size={16} />Buka Pembelian</Button> : <Button onClick={() => onNavigate("invoices")}><ReceiptText size={16} />Buka Faktur Pajak</Button>}
+    />
+
+    <div className="mb-6">
+      <div className="mb-2.5 flex items-center justify-between">
+        <div>
+          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">Status Tugas & Tindak Lanjut Faktur</h3>
+          <p className="text-[11px] text-slate-500">Daftar tindakan operasional dan kelengkapan faktur pajak</p>
+        </div>
+      </div>
+      <SummaryCards cards={taskCards} columns={4} />
+    </div>
+
+    <div className="mb-6">
+      <div className="mb-2.5 flex items-center justify-between">
+        <div>
+          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">Ringkasan Finansial Bulan Ini</h3>
+          <p className="text-[11px] text-slate-500">Nilai transaksi pembelian dan PPN untuk periode {monthText(currentMonthIndex + 1)} {currentYear}</p>
+        </div>
+      </div>
+      <SummaryCards cards={financialCards} />
+    </div>
+
+    <TaskReviewModal
+      type={reviewModal}
+      onClose={() => setReviewModal(null)}
+      onSelectTarget={(targetPage, params) => onNavigate(targetPage, params)}
+    />
 
     <section className="mb-5 space-y-4">
       <div><h2 className="text-lg font-semibold text-slate-900">Rekap pembelian bulanan</h2><p className="mt-1 text-sm text-slate-600">Tahun {analytics?.year ?? currentYear} · Faktur dihitung sebelum PPN; PPN dirinci terpisah.</p></div>

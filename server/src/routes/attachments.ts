@@ -114,11 +114,6 @@ router.post("/", async (c) => {
           ownerType === "PURCHASE" ? "PURCHASE_SOURCE" : "TAX_INVOICE_PDF", storagePath, safeOriginalName, rule.mime, bytes.byteLength, checksum, c.get("user").id,
           ownerType === "TAX_INVOICE" ? supersedesAttachmentId : null]
       );
-      if (ownerType === "TAX_INVOICE" && supersedesAttachmentId && previousLifecycleStatus === "VERIFIED") {
-        const lifecycleStatus = previousLifecycleStatus;
-        await conn.execute("UPDATE tax_invoices SET lifecycle_status='UNDER_REVIEW' WHERE id=?", [ownerId]);
-        await writeAudit({ userId: c.get("user").id, action: "UPDATE", entityType: "TAX_INVOICE", entityId: ownerId, oldValues: { lifecycle_status: lifecycleStatus }, newValues: { lifecycle_status: "UNDER_REVIEW" }, reason: "Versi file baru diunggah; faktur dikembalikan ke antrean review." }, conn);
-      }
       if (ownerType === "TAX_INVOICE") {
         const lifecycleStatus = previousLifecycleStatus;
         await conn.execute(
@@ -126,7 +121,7 @@ router.post("/", async (c) => {
            VALUES (?, ?, 'FILE_VERSION_UPLOADED', ?, ?, ?, ?)`,
           [crypto.randomUUID(), ownerId, c.get("user").id,
             JSON.stringify({ lifecycle_status: lifecycleStatus }),
-            JSON.stringify({ lifecycle_status: lifecycleStatus === "VERIFIED" && supersedesAttachmentId ? "UNDER_REVIEW" : lifecycleStatus, attachment_id: id, filename: safeOriginalName, version: versionNumber, version_nsfp: versionNsfp }), revisionReason]
+            JSON.stringify({ lifecycle_status: lifecycleStatus, attachment_id: id, filename: safeOriginalName, version: versionNumber, version_nsfp: versionNsfp }), revisionReason]
         );
       }
       await writeAudit({ userId: c.get("user").id, action: "UPLOAD", entityType: "ATTACHMENT", entityId: id, newValues: { owner_type: ownerType, owner_id: ownerId, filename: safeOriginalName, size: bytes.byteLength, version: ownerType === "TAX_INVOICE" ? versionNumber : undefined, supersedes_attachment_id: supersedesAttachmentId, revision_reason: revisionReason || undefined }, reason: ownerType === "TAX_INVOICE" ? revisionReason : undefined }, conn);

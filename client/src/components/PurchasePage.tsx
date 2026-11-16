@@ -8,7 +8,12 @@ import { InvoiceAttachment, PageResult, Project, PurchaseDocument, PurchaseItem,
 import { Button, EmptyState, ErrorBanner, Field, inputClass as sharedInputClass, LoadingState, Modal, SectionHeading, StatusBadge, SummaryCards } from "./common";
 import { SearchableSelect } from "./SearchableSelect";
 
-type Props = { user: User; notify: (message: string, kind?: "success" | "error") => void };
+type Props = {
+  user: User;
+  notify: (message: string, kind?: "success" | "error") => void;
+  navHighlight?: { q?: string; highlightId?: string } | null;
+  onClearNavHighlight?: () => void;
+};
 const inputClass = sharedInputClass.replace("rounded-xl", "rounded-lg");
 type PurchaseEditorRoute = { mode: "new" } | { mode: "edit"; id: string } | null;
 type AttachmentPreview = Pick<InvoiceAttachment, "id" | "original_filename" | "mime_type"> & Partial<Pick<InvoiceAttachment, "nsfp" | "invoice_date">> & { uploaded_at?: string };
@@ -136,7 +141,7 @@ function purchaseEditorFromHash(): PurchaseEditorRoute {
   return null;
 }
 
-export function PurchasePage({ user, notify }: Props) {
+export function PurchasePage({ user, notify, navHighlight, onClearNavHighlight }: Props) {
   const defaultDateRange = useMemo(() => thisMonthDateRange(), []);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(15);
@@ -150,6 +155,30 @@ export function PurchasePage({ user, notify }: Props) {
   const [openIds, setOpenIds] = useState<Set<string>>(new Set());
   const [editorRoute, setEditorRoute] = useState<PurchaseEditorRoute>(purchaseEditorFromHash);
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    if (navHighlight?.q) {
+      setSearch(navHighlight.q);
+    }
+  }, [navHighlight?.q]);
+
+  useEffect(() => {
+    if (!navHighlight?.highlightId) return;
+    const targetId = `row-${navHighlight.highlightId}`;
+    const timer = setTimeout(() => {
+      const el = document.getElementById(targetId);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("ring-4", "ring-amber-400", "bg-amber-100", "transition-all", "duration-500");
+        const clearTimer = setTimeout(() => {
+          el.classList.remove("ring-4", "ring-amber-400", "bg-amber-100");
+          onClearNavHighlight?.();
+        }, 4000);
+        return () => clearTimeout(clearTimer);
+      }
+    }, 450);
+    return () => clearTimeout(timer);
+  }, [navHighlight?.highlightId, search]);
   const { data: summary, isLoading: summaryLoading } = useQuery({ queryKey: ["dashboard"], queryFn: () => api<PurchaseSummary>("/api/dashboard-summary") });
   const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
   if (debouncedSearch) params.set("q", debouncedSearch);
@@ -311,7 +340,7 @@ function PurchaseItemRow({ document, item, user, onEdit }: { document: PurchaseD
   const selectedFile = preview?.files.find((file) => file.id === preview.selectedId);
 
   return <>
-    <tr className="hover:bg-slate-50/70">
+    <tr id={`row-item-${item.id}`} className="hover:bg-slate-50/70">
       <td className="px-4 py-2 text-slate-700">{dateText(document.purchase_date)}</td>
       <td className="px-4 py-2 text-slate-700">{document.supplier_name}</td>
       <td className="px-4 py-2 text-slate-700">{item.project_name || "—"}</td>
@@ -348,7 +377,7 @@ function PurchaseGroupRow({ doc, expanded, toggle, user, onUpload, onEdit }: { d
   const invoiceProgress = invoiceRequiredItems.length ? uploadedInvoiceItems / invoiceRequiredItems.length : 0;
   const allInvoicesUploaded = invoiceRequiredItems.length > 0 && uploadedInvoiceItems === invoiceRequiredItems.length;
   return <>
-    <tr tabIndex={0} aria-expanded={expanded} onClick={toggle} onKeyDown={(event) => { if (event.target !== event.currentTarget) return; if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggle(); } }} className={`cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 ${expanded ? "bg-slate-50/80" : "hover:bg-slate-50/70"}`}>
+    <tr id={`row-doc-${doc.id}`} tabIndex={0} aria-expanded={expanded} onClick={toggle} onKeyDown={(event) => { if (event.target !== event.currentTarget) return; if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggle(); } }} className={`cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 ${expanded ? "bg-slate-50/80" : "hover:bg-slate-50/70"}`}>
       <td className="px-4 py-2"><button onClick={(event) => { event.stopPropagation(); toggle(); }} aria-label={expanded ? "Ciutkan" : "Buka detail"} aria-expanded={expanded} className={`rounded-lg border p-1.5 transition ${expanded ? "border-slate-300 bg-white text-slate-700 shadow-sm" : "border-transparent text-slate-500 hover:border-slate-200 hover:bg-slate-50 hover:text-slate-800"}`}>{expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</button></td>
       <td className="px-4 py-2"><span className="font-semibold text-slate-900">{doc.purchase_group_code}</span><span className="mt-0.5 block text-xs text-slate-600">{dateText(doc.purchase_date)}</span></td>
       <td className="px-4 py-2 font-medium text-slate-800">{doc.supplier_name}</td><td className="px-4 py-2 text-slate-700">{doc.supplier_document_no || "—"}</td>
@@ -358,7 +387,7 @@ function PurchaseGroupRow({ doc, expanded, toggle, user, onUpload, onEdit }: { d
     </tr>
     {expanded && <tr className="bg-slate-50/60"><td colSpan={8} className="px-4 pb-4 pt-2"><div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3 px-1"><div className="text-xs font-semibold text-slate-700">Barang dalam pembelian #{doc.purchase_group_code}</div><div className="flex flex-wrap items-center justify-end gap-2">{files.map((file, index) => <div key={file.id} className="flex max-w-full flex-wrap items-center gap-1 rounded-xl border border-slate-200 bg-white p-1"><span title={file.original_filename} className="max-w-40 truncate px-2 text-xs text-slate-600">{file.original_filename}</span><Button variant="secondary" className="px-2.5 py-1 text-xs" title={`Preview ${file.original_filename}`} onClick={() => setPreviewAttachment(file)}><Eye size={13} />{files.length > 1 ? `Preview ${index + 1}` : "Preview nota"}</Button><Button variant="secondary" className="px-2.5 py-1 text-xs" title={`Unduh ${file.original_filename}`} onClick={() => downloadFile(`/api/attachments/${file.id}/download`, file.original_filename)}><Download size={13} />{files.length > 1 ? `Unduh ${index + 1}` : "Unduh nota"}</Button></div>)}{canUploadPurchaseNote && <label className={`inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition ${uploading ? "pointer-events-none opacity-60" : "cursor-pointer hover:bg-slate-100"}`}>{uploading ? <LoaderCircle size={14} className="animate-spin motion-reduce:animate-none" /> : <FileUp size={14} />}{uploading ? "Mengunggah…" : "Unggah nota"}<input type="file" accept=".pdf,.jpg,.jpeg,.png" disabled={uploading} className="hidden" onChange={async (e) => { const file = e.target.files?.[0]; if (file) { setUploading(true); try { await onUpload(file); } finally { setUploading(false); } } e.currentTarget.value = ""; }} /></label>}</div></div>
-      <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white"><table className="w-full min-w-[1180px] whitespace-nowrap text-left text-xs"><thead className="bg-slate-100 uppercase tracking-wide text-slate-600"><tr><th className="px-3 py-2.5">Kode item</th><th className="px-3 py-2.5">Project</th><th className="px-3 py-2.5">Nama barang</th><th className="px-3 py-2.5 text-right">Qty</th><th className="px-3 py-2.5">UOM</th><th className="px-3 py-2.5 text-right">Sub Total</th><th className="px-3 py-2.5 text-right">PPN</th><th className="px-3 py-2.5 text-right">Total</th><th className="px-3 py-2.5">Faktur</th><th className="px-3 py-2.5">Tanggal faktur</th><th className="px-3 py-2.5">Preview faktur</th></tr></thead><tbody className="divide-y divide-slate-100">{doc.items.map((item) => { const attachments = item.invoice_attachments || []; const latestInvoice = attachments[0]; const emptyLabel = item.invoice_requirement === "NOT_REQUIRED" ? "Non faktur" : !canPreviewInvoices && item.has_uploaded_invoice ? "Akses terbatas" : "Belum diunggah"; return <tr key={item.id} className="odd:bg-white even:bg-slate-50/60 hover:bg-slate-100/70"><td className="px-3 py-2.5 font-medium text-blue-700">{item.item_code}</td><td className="px-3 py-2.5 text-slate-700">{item.project_name || "Tanpa project"}</td><td className="px-3 py-2.5 font-medium text-slate-900">{item.item_name}</td><td className="px-3 py-2.5 text-right tabular-nums text-slate-800">{quantityText(item.quantity)}</td><td className="px-3 py-2.5 text-slate-800">{item.uom}</td><td className="px-3 py-2.5 text-right tabular-nums font-medium text-slate-900">{money(item.purchase_subtotal)}</td><td className="px-3 py-2.5 text-right tabular-nums">{money(item.purchase_tax_amount)}</td><td className="px-3 py-2.5 text-right tabular-nums font-medium text-slate-900">{money(item.purchase_total ?? Number(item.purchase_subtotal) + Number(item.purchase_tax_amount || 0))}</td><td className="px-3 py-2.5"><StatusBadge value={item.invoice_requirement} /></td><td className="px-3 py-2.5 text-slate-600">{latestInvoice ? dateText(latestInvoice.invoice_date) : !canPreviewInvoices && item.has_uploaded_invoice ? "Akses terbatas" : "—"}</td><td className="px-3 py-2.5">{canPreviewInvoices && attachments.length ? <div className="flex flex-wrap gap-1.5">{attachments.map((attachment, index) => <button key={attachment.id} type="button" aria-label={`Preview faktur ${attachment.nsfp}`} title={`${attachment.nsfp} · ${attachment.original_filename}`} onClick={() => setPreviewAttachment(attachment)} className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-white px-2.5 py-1.5 font-medium text-blue-700 transition hover:border-blue-300 hover:bg-blue-50"><Eye size={13} />{attachments.length > 1 ? `Preview ${index + 1}` : "Preview"}</button>)}</div> : <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs italic text-slate-500">{emptyLabel}</span>}</td></tr>; })}</tbody></table></div>
+      <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white"><table className="w-full min-w-[1180px] whitespace-nowrap text-left text-xs"><thead className="bg-slate-100 uppercase tracking-wide text-slate-600"><tr><th className="px-3 py-2.5">Kode item</th><th className="px-3 py-2.5">Project</th><th className="px-3 py-2.5">Nama barang</th><th className="px-3 py-2.5 text-right">Qty</th><th className="px-3 py-2.5">UOM</th><th className="px-3 py-2.5 text-right">Sub Total</th><th className="px-3 py-2.5 text-right">PPN</th><th className="px-3 py-2.5 text-right">Total</th><th className="px-3 py-2.5">Faktur</th><th className="px-3 py-2.5">Tanggal faktur</th><th className="px-3 py-2.5">Preview faktur</th></tr></thead><tbody className="divide-y divide-slate-100">{doc.items.map((item) => { const attachments = item.invoice_attachments || []; const latestInvoice = attachments[0]; const emptyLabel = item.invoice_requirement === "NOT_REQUIRED" ? "Non faktur" : !canPreviewInvoices && item.has_uploaded_invoice ? "Akses terbatas" : "Belum diunggah"; return <tr key={item.id} id={`row-item-${item.id}`} className="odd:bg-white even:bg-slate-50/60 hover:bg-slate-100/70"><td className="px-3 py-2.5 font-medium text-blue-700">{item.item_code}</td><td className="px-3 py-2.5 text-slate-700">{item.project_name || "Tanpa project"}</td><td className="px-3 py-2.5 font-medium text-slate-900">{item.item_name}</td><td className="px-3 py-2.5 text-right tabular-nums text-slate-800">{quantityText(item.quantity)}</td><td className="px-3 py-2.5 text-slate-800">{item.uom}</td><td className="px-3 py-2.5 text-right tabular-nums font-medium text-slate-900">{money(item.purchase_subtotal)}</td><td className="px-3 py-2.5 text-right tabular-nums">{money(item.purchase_tax_amount)}</td><td className="px-3 py-2.5 text-right tabular-nums font-medium text-slate-900">{money(item.purchase_total ?? Number(item.purchase_subtotal) + Number(item.purchase_tax_amount || 0))}</td><td className="px-3 py-2.5"><StatusBadge value={item.invoice_requirement} /></td><td className="px-3 py-2.5 text-slate-600">{latestInvoice ? dateText(latestInvoice.invoice_date) : !canPreviewInvoices && item.has_uploaded_invoice ? "Akses terbatas" : "—"}</td><td className="px-3 py-2.5">{canPreviewInvoices && attachments.length ? <div className="flex flex-wrap gap-1.5">{attachments.map((attachment, index) => <button key={attachment.id} type="button" aria-label={`Preview faktur ${attachment.nsfp}`} title={`${attachment.nsfp} · ${attachment.original_filename}`} onClick={() => setPreviewAttachment(attachment)} className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-white px-2.5 py-1.5 font-medium text-blue-700 transition hover:border-blue-300 hover:bg-blue-50"><Eye size={13} />{attachments.length > 1 ? `Preview ${index + 1}` : "Preview"}</button>)}</div> : <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs italic text-slate-500">{emptyLabel}</span>}</td></tr>; })}</tbody></table></div>
     </div></td></tr>}
     {previewAttachment && createPortal(<Modal title={previewAttachment.original_filename} subtitle={previewAttachment.nsfp ? `Faktur ${previewAttachment.nsfp} · ${dateText(previewAttachment.invoice_date)}` : "Nota pembelian"} onClose={() => setPreviewAttachment(null)} size="max-w-5xl"><div className="h-[65vh] min-h-[300px] overflow-hidden rounded-xl border border-slate-200 bg-slate-100">{previewAttachment.mime_type === "application/pdf" ? <iframe title={`Preview ${previewAttachment.nsfp ? `faktur ${previewAttachment.nsfp}` : "nota pembelian"}`} src={`/api/attachments/${previewAttachment.id}/preview`} className="h-full w-full border-0" /> : <img src={`/api/attachments/${previewAttachment.id}/preview`} alt={`Preview ${previewAttachment.nsfp ? `faktur ${previewAttachment.nsfp}` : "nota pembelian"}`} className="h-full w-full object-contain" />}</div><div className="mt-3 flex justify-end"><Button variant="secondary" onClick={() => downloadFile(`/api/attachments/${previewAttachment.id}/download`, previewAttachment.original_filename)}><Download size={14} />Unduh file</Button></div></Modal>, document.body)}
   </>;
