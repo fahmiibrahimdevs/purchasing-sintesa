@@ -471,13 +471,15 @@ router.delete("/tax-invoices/:id", roles, async (c) => {
   const storagePaths: string[] = [];
   try {
     await withTransaction(async (conn) => {
-      const [invoiceRows] = await conn.execute("SELECT id, lifecycle_status FROM tax_invoices WHERE id=? FOR UPDATE", [id]);
+      const [invoiceRows] = await conn.execute("SELECT id, nsfp, lifecycle_status FROM tax_invoices WHERE id=? FOR UPDATE", [id]);
       const invoice = (invoiceRows as any[])[0];
       if (!invoice) throw new Error("Faktur tidak ditemukan.");
-      if (invoice.lifecycle_status !== "DRAFT") throw new Error("Hanya faktur berstatus Draft yang bisa dihapus. Faktur yang sudah diproses harus tetap menyimpan riwayatnya.");
+      if (invoice.lifecycle_status === "REPLACED") {
+        throw new Error("Faktur ini sudah pernah digantikan oleh faktur pengganti sehingga tidak dapat dihapus.");
+      }
 
       const [replacementRows] = await conn.execute("SELECT id FROM tax_invoices WHERE replaces_tax_invoice_id=? LIMIT 1 FOR UPDATE", [id]);
-      if ((replacementRows as any[]).length) throw new Error("Draft ini sudah dirujuk oleh faktur pengganti sehingga tidak dapat dihapus.");
+      if ((replacementRows as any[]).length) throw new Error("Faktur ini sudah dirujuk oleh faktur pengganti sehingga tidak dapat dihapus.");
 
       const [fileRows] = await conn.execute("SELECT storage_path FROM attachments WHERE tax_invoice_id=?", [id]);
       storagePaths.push(...(fileRows as any[]).map((row) => String(row.storage_path)));
@@ -486,9 +488,17 @@ router.delete("/tax-invoices/:id", roles, async (c) => {
       await conn.execute("DELETE FROM attachments WHERE tax_invoice_id=?", [id]);
       await conn.execute("DELETE FROM tax_invoice_lines WHERE tax_invoice_id=?", [id]);
       await conn.execute("DELETE FROM tax_invoices WHERE id=?", [id]);
+
+      await writeAudit({
+        userId: c.get("user").id,
+        action: "DELETE",
+        entityType: "TAX_INVOICE",
+        entityId: id,
+        oldValues: { nsfp: invoice.nsfp, lifecycle_status: invoice.lifecycle_status },
+      }, conn);
     });
   } catch (error: any) {
-    return c.json({ error: error.message || "Draft faktur gagal dihapus." }, 409);
+    return c.json({ error: error.message || "Faktur gagal dihapus." }, 409);
   }
   await Promise.all(storagePaths.map((path) => unlink(path).catch(() => undefined)));
   return c.body(null, 204);

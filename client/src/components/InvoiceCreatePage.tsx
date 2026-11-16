@@ -169,7 +169,7 @@ export function InvoiceCreatePage({ initialItem, replacementInvoiceId, onBack, n
   const someVisibleSelected = visibleItems.some((item) => selectedItemIds.includes(item.id));
   const selectedItemsReady = selectedItems.length > 0 && selectedItems.length === selectedItemIds.length && Boolean(supplierId);
   const replacementItemsReady = !replacementInvoiceId || Boolean(replacementQuery.data && replacementAllocations.size > 0 && selectedItemIds.length === replacementAllocations.size && [...replacementAllocations].every(([id, allocation]) => Number(itemsById.get(id)?.remaining_quantity || 0) + 0.0001 >= allocation.quantity));
-  const canSave = Boolean(selectedItemsReady && replacementItemsReady && nsfp.trim() && invoiceDate && isValidTaxPeriod(taxPeriodYear, taxPeriodMonth) && invoiceFile && (!replacementInvoiceId || replacementReason.trim()) && !availableQuery.isLoading && !replacementQuery.isLoading);
+  const canSave = Boolean(selectedItemsReady && replacementItemsReady && nsfp.trim() && invoiceDate && isValidTaxPeriod(taxPeriodYear, taxPeriodMonth) && (!replacementInvoiceId || replacementReason.trim()) && !availableQuery.isLoading && !replacementQuery.isLoading);
 
   useEffect(() => {
     if (selectAllRef.current) selectAllRef.current.indeterminate = someVisibleSelected && !allVisibleSelected;
@@ -223,7 +223,6 @@ export function InvoiceCreatePage({ initialItem, replacementInvoiceId, onBack, n
       if (!nsfp.trim()) throw new Error("NSFP wajib diisi.");
       if (replacementInvoiceId && !replacementReason.trim()) throw new Error("Alasan faktur pengganti wajib diisi.");
       if (!isValidTaxPeriod(taxPeriodYear, taxPeriodMonth)) throw new Error("Masa Pajak harus berisi bulan dan tahun yang valid.");
-      if (!invoiceFile) throw new Error("Unggah file faktur pajak terlebih dahulu.");
 
       const lines = selectedItems.map((item) => {
         const quantity = itemQuantity(item);
@@ -267,12 +266,14 @@ export function InvoiceCreatePage({ initialItem, replacementInvoiceId, onBack, n
       };
       const invoice = await api<TaxInvoice>("/api/tax-invoices", { method: "POST", body: jsonBody(payload) });
       createdInvoiceId = invoice.id;
-      const form = new FormData();
-      form.append("file", invoiceFile.file, invoiceVersionFilename(nsfp, pendingVersionNumber, invoiceFile.file.name));
-      form.append("owner_type", "TAX_INVOICE");
-      form.append("owner_id", invoice.id);
-      if (replacementReason.trim()) form.append("revision_reason", replacementReason.trim());
-      await api("/api/attachments", { method: "POST", body: form });
+      if (invoiceFile) {
+        const form = new FormData();
+        form.append("file", invoiceFile.file, invoiceVersionFilename(nsfp, pendingVersionNumber, invoiceFile.file.name));
+        form.append("owner_type", "TAX_INVOICE");
+        form.append("owner_id", invoice.id);
+        if (replacementReason.trim()) form.append("revision_reason", replacementReason.trim());
+        await api("/api/attachments", { method: "POST", body: form });
+      }
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["invoices"] }),
         queryClient.invalidateQueries({ queryKey: ["invoice-queue"] }),
@@ -399,14 +400,14 @@ export function InvoiceCreatePage({ initialItem, replacementInvoiceId, onBack, n
         </section>
 
         <section className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5">
-          <div className="mb-3 flex items-center gap-2"><span className="grid h-7 w-7 place-items-center rounded-full bg-blue-50 text-xs font-bold text-blue-700">C</span><div><h3 className="text-sm font-semibold text-slate-900">File faktur pajak</h3><p className="text-xs text-slate-500">Unggah satu PDF atau gambar. Perubahan setelah faktur tersimpan dilakukan lewat revisi.</p></div></div>
-          <label className="flex min-h-24 cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-blue-300 bg-blue-50/40 px-4 py-4 text-center transition hover:bg-blue-50"><FileUp size={20} className="mb-1 text-blue-700" /><span className="text-sm font-semibold text-slate-800">{invoiceFile ? "Ganti file pilihan sebelum disimpan" : "Pilih PDF atau gambar faktur pajak"}</span><span className="mt-1 text-xs text-slate-500">PDF, JPG, atau PNG · maksimal 15 MB · satu file</span><input className="sr-only" type="file" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" onChange={(event) => { const file = event.target.files?.[0]; setInvoiceFile(file ? { file, selectedAt: new Date().toISOString() } : null); event.currentTarget.value = ""; }} /></label>
+          <div className="mb-3 flex items-center gap-2"><span className="grid h-7 w-7 place-items-center rounded-full bg-blue-50 text-xs font-bold text-blue-700">C</span><div><h3 className="text-sm font-semibold text-slate-900">File faktur pajak</h3><p className="text-xs text-slate-500">Opsional. Unggah file PDF atau foto sekarang atau bisa diunggah nanti.</p></div></div>
+          <label className="flex min-h-24 cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-blue-300 bg-blue-50/40 px-4 py-4 text-center transition hover:bg-blue-50"><FileUp size={20} className="mb-1 text-blue-700" /><span className="text-sm font-semibold text-slate-800">{invoiceFile ? "Ganti file pilihan sebelum disimpan" : "Pilih PDF atau gambar faktur pajak (opsional)"}</span><span className="mt-1 text-xs text-slate-500">PDF, JPG, atau PNG · maksimal 15 MB · satu file</span><input className="sr-only" type="file" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" onChange={(event) => { const file = event.target.files?.[0]; setInvoiceFile(file ? { file, selectedAt: new Date().toISOString() } : null); event.currentTarget.value = ""; }} /></label>
           {replacementInvoiceId && <div className="mt-4"><Field label="Alasan faktur pengganti" required hint="Catat alasan supplier menerbitkan NSFP pengganti agar jelas di riwayat versi."><textarea className={`${inputClass} min-h-20`} rows={3} maxLength={500} value={replacementReason} onChange={(event) => setReplacementReason(event.target.value)} placeholder="Contoh: supplier membatalkan faktur lama karena tanggal faktur salah, lalu menerbitkan NSFP pengganti." /></Field></div>}
           {invoiceFile && <div className="mt-5 border-t border-slate-100 pt-4"><div className="mb-3"><h4 className="text-sm font-semibold text-slate-900">File yang akan diunggah</h4><p className="mt-0.5 text-xs text-slate-500">File ini akan menjadi versi V{pendingVersionNumber} setelah faktur disimpan.{replacementInvoiceId ? " Riwayat versi dari faktur lama tetap dibawa." : " Versi pertama dicatat sebagai Unggahan awal."}</p></div><ol><li className="relative flex gap-3"><div className="relative flex w-8 shrink-0 justify-center"><span aria-hidden="true" className="absolute left-1/2 top-8 h-5 w-px -translate-x-1/2 bg-slate-200" /><span className="relative z-10 grid h-8 w-8 place-items-center rounded-xl border border-violet-200 bg-violet-50 text-violet-700"><FileText size={15} /></span></div><div className="min-w-0 flex-1 py-0.5"><p className="text-sm font-semibold text-slate-900">{nsfp.trim() || "Nomor faktur"} - V{pendingVersionNumber}<span className="ml-2 rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-semibold text-violet-700">Versi terbaru</span></p><p className="text-xs text-slate-500">{dateTimeText(invoiceFile.selectedAt)} · Oleh {userName} · Menunggu disimpan</p><p className="mt-0.5 text-xs text-slate-600">{invoiceFile.file.name.match(/\.([^.]+)$/)?.[1]?.toUpperCase() || "File"} · {invoiceFile.file.size >= 1024 * 1024 ? `${(invoiceFile.file.size / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(invoiceFile.file.size / 1024))} KB`}</p>{replacementReason.trim() && <p className="mt-1 text-xs leading-relaxed text-slate-700"><span className="font-semibold">Alasan versi:</span> {replacementReason.trim()}</p>}</div></li></ol></div>}
         </section>
       </>}
 
-      <div className="flex flex-col-reverse justify-between gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center"><p className="text-xs text-slate-500">{selectedItems.length} barang dipilih{selectedItems.length > 0 ? ` dari ${selectedDocumentCount} nota · ${supplier?.name}` : ` · ${availableItems.length} barang tersedia`}</p><div className="flex justify-end gap-2"><Button variant="secondary" disabled={saving} onClick={onBack}>Kembali</Button><span title={canSave ? undefined : "Pilih barang, isi NSFP, tanggal dan Masa Pajak, lalu unggah file faktur untuk menyimpan."}><Button loading={saving} disabled={!canSave} onClick={save}>{saving ? "Menyimpan faktur…" : replacementInvoiceId ? "Simpan Faktur Pengganti" : "Simpan & Ajukan Review"}</Button></span></div></div>
+      <div className="flex flex-col-reverse justify-between gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center"><p className="text-xs text-slate-500">{selectedItems.length} barang dipilih{selectedItems.length > 0 ? ` dari ${selectedDocumentCount} nota · ${supplier?.name}` : ` · ${availableItems.length} barang tersedia`}</p><div className="flex justify-end gap-2"><Button variant="secondary" disabled={saving} onClick={onBack}>Kembali</Button><span title={canSave ? undefined : "Pilih barang, isi NSFP, tanggal dan Masa Pajak untuk menyimpan."}><Button loading={saving} disabled={!canSave} onClick={save}>{saving ? "Menyimpan faktur…" : replacementInvoiceId ? "Simpan faktur pengganti" : "Simpan faktur pajak"}</Button></span></div></div>
     </div>
   </div>;
 }

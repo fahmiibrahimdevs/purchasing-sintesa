@@ -233,7 +233,8 @@ router.get("/purchase-documents", async (c) => {
     : "";
   const [documents] = await pool.execute(
     `SELECT d.*, s.name AS supplier_name, s.supplier_code,
-       COUNT(DISTINCT pi.id) AS item_count, COALESCE(SUM(COALESCE(pi.purchase_total, pi.purchase_subtotal)), 0) AS total_amount
+       COUNT(DISTINCT pi.id) AS item_count, COALESCE(SUM(COALESCE(pi.purchase_total, pi.purchase_subtotal)), 0) AS total_amount,
+       (SELECT COUNT(*) FROM attachments att WHERE att.purchase_document_id = d.id) AS source_attachment_count
      FROM purchase_documents d JOIN suppliers s ON s.id=d.supplier_id LEFT JOIN purchase_items pi ON pi.purchase_document_id=d.id${joinItemFilter}
      WHERE ${where} GROUP BY d.id ORDER BY d.purchase_date DESC, d.created_at DESC LIMIT ? OFFSET ?`,
     [...itemFilterParams, ...params, pageSize, offset]
@@ -361,8 +362,7 @@ router.get("/purchase-items/invoice-items", allowRoles("PURCHASING", "TAX_STAFF"
   const coverage = c.req.query("coverage");
   const includeNonRequired = c.req.query("includeNonRequired") === "1";
   const [docRows] = await pool.query("SELECT id FROM purchase_documents WHERE record_status<>'CANCELLED' ORDER BY purchase_date DESC, created_at DESC");
-  const isTaxRole = ["TAX_STAFF", "ADMIN"].includes(c.get("user").role);
-  const items = await itemsForDocuments((docRows as any[]).map((row) => row.id), isTaxRole, true, isTaxRole);
+  const items = await itemsForDocuments((docRows as any[]).map((row) => row.id), true, true, true);
   const filtered = items.filter((item) => item.record_status === "ACTIVE"
     && (includeNonRequired || item.invoice_requirement === "REQUIRED")
     && (!supplierId || item.supplier_id === supplierId)

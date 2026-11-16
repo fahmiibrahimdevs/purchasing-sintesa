@@ -1,9 +1,9 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, CircleDollarSign, Download, ExternalLink, FileClock, FileText, FileUp, FileWarning, Folder, FolderOpen, Pencil, Plus, ReceiptText, RotateCcw, Rows3, Search, Table2, Trash2, XCircle } from "lucide-react";
+import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, CircleDollarSign, Download, ExternalLink, Eye, FileClock, FileText, FileUp, FileWarning, Folder, FolderOpen, Pencil, Plus, ReceiptText, RotateCcw, Rows3, Search, Table2, Trash2, XCircle } from "lucide-react";
 import { api, dateText, dateTimeText, downloadFile, jsonBody, money, monthText, quantityText } from "../lib/api";
 import { useDebouncedValue } from "../lib/hooks";
-import { confirmAction, showUndoToast } from "../lib/swal";
+import { confirmAction, confirmDeleteWithKeyword, showUndoToast } from "../lib/swal";
 import { InvoiceLink, Project, PurchaseItem, Supplier, TaxInvoice, User } from "../types";
 import { Button, EmptyState, ErrorBanner, Field, inputClass, LoadingState, Modal, SectionHeading, StatusBadge, SummaryCards } from "./common";
 import { SearchableSelect } from "./SearchableSelect";
@@ -79,7 +79,7 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify, navH
   const debouncedSearch = useDebouncedValue(search.trim());
   const [supplierId, setSupplierId] = useState("");
   const [projectId, setProjectId] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"" | "unlinked" | "complete" | "replacement">("");
+  const [statusFilter, setStatusFilter] = useState<"" | "unlinked" | "missing_file" | "complete" | "replacement">("");
   const [dateRange, setDateRange] = useState(defaultDateRange);
   const [view, setView] = useState<"grouped" | "flat">("flat");
   const [groupsPage, setGroupsPage] = useState(1);
@@ -108,7 +108,7 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify, navH
   });
   const { data: invoiceSummary, isLoading: invoiceSummaryLoading } = useQuery({
     queryKey: ["dashboard"],
-    queryFn: () => api<{ active_invoices_this_month: number; active_invoice_ppn_this_month: number; replacement_invoices_pending: number }>("/api/dashboard-summary"),
+    queryFn: () => api<{ active_invoices_this_month: number; active_invoice_ppn_this_month: number; replacement_invoices_pending: number; invoices_without_attachment: number }>("/api/dashboard-summary"),
   });
   const { data: suppliers = [] } = useQuery({ queryKey: ["suppliers"], queryFn: () => api<Supplier[]>("/api/suppliers") });
   const { data: projects = [] } = useQuery({ queryKey: ["projects"], queryFn: () => api<Project[]>("/api/projects") });
@@ -186,13 +186,15 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify, navH
   const statusCounts = useMemo(() => {
     let all = 0;
     let unlinked = 0;
+    let missing_file = 0;
     let complete = 0;
     let replacement = 0;
 
     for (const group of tableGroups) {
       const isUnlinked = !group.invoice;
       const isReplacement = Boolean(group.invoice && (group.invoice.file_replacement_pending || group.invoice.lifecycle_status === "CANCELLED"));
-      const isComplete = Boolean(group.invoice && !isReplacement);
+      const isMissingFile = Boolean(group.invoice && !isReplacement && !group.invoice.latest_attachment_id);
+      const isComplete = Boolean(group.invoice && !isReplacement && group.invoice.latest_attachment_id);
 
       const dateMatches = (date: string) => {
         const day = date.slice(0, 10);
@@ -209,11 +211,12 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify, navH
       const count = matchingEntries.length;
       all += count;
       if (isUnlinked) unlinked += count;
+      if (isMissingFile) missing_file += count;
       if (isComplete) complete += count;
       if (isReplacement) replacement += count;
     }
 
-    return { all, unlinked, complete, replacement };
+    return { all, unlinked, missing_file, complete, replacement };
   }, [tableGroups, dateRange.from, dateRange.to, projectId]);
 
   const projectCounts = useMemo(() => {
@@ -229,9 +232,11 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify, navH
       if (group.invoice && !dateMatches(group.invoice.invoice_date)) continue;
       if (!group.invoice && !group.entries.some((e) => dateMatches(e.item.purchase_date || group.purchaseDate))) continue;
 
+      const isReplacement = Boolean(group.invoice && (group.invoice.file_replacement_pending || group.invoice.lifecycle_status === "CANCELLED"));
       if (statusFilter === "unlinked" && group.invoice) continue;
-      if (statusFilter === "complete" && (!group.invoice || group.invoice.lifecycle_status === "CANCELLED" || group.invoice.file_replacement_pending)) continue;
-      if (statusFilter === "replacement" && (!group.invoice || (!group.invoice.file_replacement_pending && group.invoice.lifecycle_status !== "CANCELLED"))) continue;
+      if (statusFilter === "missing_file" && (!group.invoice || isReplacement || group.invoice.latest_attachment_id)) continue;
+      if (statusFilter === "complete" && (!group.invoice || isReplacement || !group.invoice.latest_attachment_id)) continue;
+      if (statusFilter === "replacement" && (!group.invoice || !isReplacement)) continue;
 
       for (const entry of group.entries) {
         all++;
@@ -262,12 +267,15 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify, navH
       if (!entries.length) return [];
     }
 
+    const isReplacement = Boolean(group.invoice && (group.invoice.file_replacement_pending || group.invoice.lifecycle_status === "CANCELLED"));
     if (statusFilter === "unlinked") {
       if (group.invoice) return [];
+    } else if (statusFilter === "missing_file") {
+      if (!group.invoice || isReplacement || group.invoice.latest_attachment_id) return [];
     } else if (statusFilter === "complete") {
-      if (!group.invoice || group.invoice.lifecycle_status === "CANCELLED" || group.invoice.file_replacement_pending) return [];
+      if (!group.invoice || isReplacement || !group.invoice.latest_attachment_id) return [];
     } else if (statusFilter === "replacement") {
-      if (!group.invoice || (!group.invoice.file_replacement_pending && group.invoice.lifecycle_status !== "CANCELLED")) return [];
+      if (!group.invoice || !isReplacement) return [];
     }
 
     return [{ ...group, entries }];
@@ -331,9 +339,24 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify, navH
     });
   }
 
-  async function deleteDraftInvoice(invoice: InvoiceLink) {
-    if (invoice.lifecycle_status !== "DRAFT") return;
-    if (!(await confirmAction({ title: `Hapus draft ${invoice.nsfp}?`, text: "Draft faktur akan dihapus permanen. Faktur yang sudah diajukan atau diproses tidak dapat dihapus.", confirmButtonText: "Ya, Hapus", danger: true }))) return;
+  async function deleteInvoice(invoice: InvoiceLink, itemCount?: number) {
+    if (!canWork || invoice.lifecycle_status === "REPLACED") return;
+    const confirmed = await confirmDeleteWithKeyword({
+      title: `Hapus Faktur Pajak ${invoice.nsfp}?`,
+      html: `
+        <div class="space-y-2 text-left text-sm text-slate-600">
+          <p>Tindakan ini akan <strong>menghapus permanen</strong> faktur dari sistem:</p>
+          <ul class="list-disc pl-5 space-y-1 text-xs text-slate-700">
+            <li>Nomor seri faktur <strong>${invoice.nsfp}</strong> akan dihapus.</li>
+            <li>${itemCount ? `Semua <strong>${itemCount} barang</strong>` : "Barang-barang"} yang tertaut akan otomatis dikembalikan ke daftar <strong>belum ada faktur</strong>.</li>
+            <li>File lampiran fisik faktur (jika ada) akan dihapus dari server.</li>
+          </ul>
+        </div>
+      `,
+      keyword: invoice.nsfp,
+      confirmButtonText: "Hapus Faktur Ini Secara Permanen",
+    });
+    if (!confirmed) return;
     try {
       await api(`/api/tax-invoices/${invoice.id}`, { method: "DELETE" });
       await Promise.all([
@@ -344,16 +367,17 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify, navH
         queryClient.invalidateQueries({ queryKey: ["purchases"] }),
         queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
       ]);
-      notify(`Draft ${invoice.nsfp} dihapus.`, "success");
+      notify(`Faktur ${invoice.nsfp} berhasil dihapus.`, "success");
     } catch (e: any) { notify(e.message, "error"); }
   }
   return <div>
     <SectionHeading title="Faktur Pajak" description="Pantau barang wajib faktur dan kelengkapan faktur pada setiap nota pembelian." action={canWork ? <Button onClick={() => onCreateInvoice()}><Plus size={16} />Input Faktur</Button> : undefined} />
-    <SummaryCards cards={[
+    <SummaryCards autoFit cards={[
       { label: "Faktur tercatat bulan ini", value: invoiceSummary?.active_invoices_this_month ?? 0, unit: "faktur", detail: "Jumlah faktur bertanggal bulan ini", icon: ReceiptText, tone: "blue", loading: invoiceSummaryLoading },
       { label: "Nilai PPN bulan ini", value: money(invoiceSummary?.active_invoice_ppn_this_month), detail: "Total PPN faktur bulan ini", icon: CircleDollarSign, tone: "emerald", loading: invoiceSummaryLoading },
-      { label: "Barang belum ada faktur", value: itemsWithoutInvoice, unit: "barang", detail: "Barang wajib faktur yang belum tertaut", icon: FileWarning, tone: "amber", loading: coverageLoading },
-      { label: "Menunggu faktur pengganti", value: invoiceSummary?.replacement_invoices_pending ?? 0, unit: "faktur", detail: "Versi terakhir dibatalkan dan belum diganti", icon: FileClock, tone: "violet", loading: invoiceSummaryLoading },
+      { label: "Barang belum ada faktur", value: itemsWithoutInvoice, unit: "barang", detail: "Barang wajib faktur yang belum tertaut", icon: FileWarning, tone: "amber", loading: coverageLoading, onReview: () => { setStatusFilter("unlinked"); setGroupsPage(1); } },
+      { label: "Faktur belum ada lampiran", value: invoiceSummary?.invoices_without_attachment ?? 0, unit: "faktur", detail: "File PDF belum diunggah", icon: FileUp, tone: "orange", loading: invoiceSummaryLoading, onReview: () => { setStatusFilter("missing_file"); setGroupsPage(1); } },
+      { label: "Menunggu faktur pengganti", value: invoiceSummary?.replacement_invoices_pending ?? 0, unit: "faktur", detail: "Versi terakhir dibatalkan dan belum diganti", icon: FileClock, tone: "violet", loading: invoiceSummaryLoading, onReview: () => { setStatusFilter("replacement"); setGroupsPage(1); } },
     ]} />
     <section className="mb-4 space-y-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-card">
       <div className="flex flex-col gap-2 xl:flex-row xl:items-center">
@@ -375,6 +399,7 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify, navH
           {[
             { value: "", label: "Semua", count: statusCounts.all },
             { value: "unlinked", label: "Tanpa Faktur", count: statusCounts.unlinked },
+            { value: "missing_file", label: "Belum Ada File", count: statusCounts.missing_file },
             { value: "complete", label: "Faktur Lengkap", count: statusCounts.complete },
             { value: "replacement", label: "Perlu Pengganti", count: statusCounts.replacement },
           ].map((tab) => {
@@ -451,7 +476,7 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify, navH
       {isLoading ? <LoadingState label="Mengambil daftar barang berfaktur…" /> : !displayedCount ? <div className="p-4"><EmptyState title={tableGroups.some((group) => group.invoice) ? "Tidak ada data yang cocok" : "Belum ada faktur terinput"} description={tableGroups.some((group) => group.invoice) ? "Coba ubah rentang tanggal atau filter yang dipilih." : "Tabel ini menampilkan barang yang perlu ditautkan ke faktur."} /></div> : view === "flat" ? <div className="overflow-x-auto"><table className="w-full min-w-[1500px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-600"><tr><th className="px-3 py-3">Tanggal</th><th className="px-3 py-3">No. faktur</th><th className="px-3 py-3">Supplier</th><th className="px-3 py-3">Project</th><th className="px-3 py-3">Nama barang</th><th className="px-3 py-3 text-right">Qty</th><th className="px-3 py-3">UOM</th><th className="px-3 py-3 text-right">Harga</th><th className="px-3 py-3 text-right">Sub total</th><th className="px-3 py-3 text-right">PPN</th><th className="px-3 py-3 text-right">Total</th><th className="px-3 py-3">Status</th><th className="px-3 py-3">Aksi</th></tr></thead><tbody className="divide-y divide-slate-100">{pageTableRows.map(({ key, group, entry }) => {
         const invoice = group.invoice;
         const { item } = entry;
-        const canDelete = invoice?.lifecycle_status === "DRAFT";
+        const canDelete = Boolean(invoice && canWork && invoice.lifecycle_status !== "REPLACED");
         const canEdit = Boolean(invoice && canWork && !["CANCELLED", "REPLACED"].includes(invoice.lifecycle_status));
         const unitPrice = entry.quantity > 0 ? entry.dpp / entry.quantity : Number(item.unit_price || 0);
         return <tr key={key} id={`row-item-${item.id}`} className="transition hover:bg-slate-50/70">
@@ -467,7 +492,7 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify, navH
           <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">{money(entry.ppn)}</td>
           <td className="whitespace-nowrap px-3 py-2.5 text-right font-medium tabular-nums">{money(entry.total)}</td>
           <td className="whitespace-nowrap px-3 py-2.5">{invoice?.file_replacement_pending ? <StatusBadge value="FILE_REPLACEMENT_PENDING" /> : invoice ? <StatusBadge value={invoiceTableStatus(invoice)} /> : <span className="inline-flex whitespace-nowrap rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">Belum tertaut</span>}</td>
-          <td className="whitespace-nowrap px-3 py-2.5"><div className="flex items-center gap-1.5">{invoice && canWork ? <><Button variant="secondary" title={`Edit faktur ${invoice.nsfp}`} className="px-2.5 py-1.5 text-xs" disabled={!canEdit} onClick={() => onEditInvoice(invoice.id)}><Pencil size={13} />Edit</Button><Button variant="dangerGhost" title={canDelete ? `Hapus draft ${invoice.nsfp}` : "Hanya faktur berstatus Draft yang bisa dihapus."} className="px-2 py-1.5 text-xs" disabled={!canDelete} onClick={() => void deleteDraftInvoice(invoice)}><Trash2 size={13} /></Button></> : !invoice && canWork ? <Button variant="secondary" className="px-2.5 py-1.5 text-xs" onClick={() => onCreateInvoice(item)}><Plus size={13} />Input faktur</Button> : <span className="text-slate-400">—</span>}</div></td>
+          <td className="whitespace-nowrap px-3 py-2.5"><div className="flex items-center gap-1.5">{invoice ? <>{canWork && <Button variant="secondary" title={`Edit faktur ${invoice.nsfp}`} className="px-2.5 py-1.5 text-xs" disabled={!canEdit} onClick={() => onEditInvoice(invoice.id)}><Pencil size={13} />Edit</Button>}<Button type="button" variant="secondary" className="px-2.5 py-1.5 text-xs" disabled={!invoice.latest_attachment_id} title={invoice.latest_attachment_id ? `Buka file faktur ${invoice.nsfp}` : "File faktur belum tersedia"} onClick={() => setPreviewFile({ id: invoice.latest_attachment_id!, nsfp: invoice.nsfp, original_filename: invoice.latest_attachment_filename || `${invoice.nsfp}.pdf`, mime_type: invoice.latest_attachment_mime_type || "application/pdf" })}><Eye size={13} />Faktur</Button>{canWork && <Button variant="dangerGhost" title={canDelete ? `Hapus faktur ${invoice.nsfp}` : "Faktur ini sudah digantikan sehingga tidak dapat dihapus."} className="px-2 py-1.5 text-xs" disabled={!canDelete} onClick={() => void deleteInvoice(invoice, 1)}><Trash2 size={13} /></Button>}</> : !invoice && canWork ? <Button variant="secondary" className="px-2.5 py-1.5 text-xs" onClick={() => onCreateInvoice(item)}><Plus size={13} />Input faktur</Button> : <span className="text-slate-400">—</span>}</div></td>
         </tr>;
       })}</tbody></table></div> : <div className="overflow-x-auto"><table className="w-full min-w-[1220px] table-fixed text-left text-sm"><colgroup><col className="w-[205px]" /><col className="w-[295px]" /><col className="w-[82px]" /><col className="w-[90px]" /><col className="w-[145px]" /><col className="w-[155px]" /><col className="w-[135px]" /><col className="w-[155px]" /></colgroup><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-600"><tr><th className="px-3 py-3">Project</th><th className="px-3 py-3">Nama barang</th><th className="px-3 py-3 text-right">Qty</th><th className="px-3 py-3">UOM</th><th className="px-3 py-3 text-right">Harga</th><th className="px-3 py-3 text-right">Sub total</th><th className="px-3 py-3 text-right">PPN</th><th className="px-3 py-3 text-right">Total</th></tr></thead><tbody className="divide-y divide-slate-100">{pageTableGroups.map((group) => {
         const invoice = group.invoice;
@@ -475,7 +500,7 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify, navH
         const subtotal = group.entries.reduce((sum, entry) => sum + entry.dpp, 0);
         const ppn = group.entries.reduce((sum, entry) => sum + entry.ppn, 0);
         const total = group.entries.reduce((sum, entry) => sum + entry.total, 0);
-        const canDelete = invoice?.lifecycle_status === "DRAFT";
+        const canDelete = Boolean(invoice && canWork && invoice.lifecycle_status !== "REPLACED");
         const canEdit = Boolean(invoice && canWork && !["CANCELLED", "REPLACED"].includes(invoice.lifecycle_status));
         return <Fragment key={group.key}>
           <tr id={invoice ? `row-invoice-${invoice.id}` : undefined} className="bg-white">
@@ -486,7 +511,7 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify, navH
                   <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1"><span className="font-semibold text-slate-900">{invoice ? <button type="button" aria-label={`Buka detail faktur ${invoice.nsfp}`} title={`Buka detail faktur ${invoice.nsfp}`} onClick={() => setSelectedInvoiceId(invoice.id)} className="group inline-flex items-center gap-1.5 rounded-sm text-left leading-none text-slate-800 transition hover:text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"><span className="leading-none">{invoice.nsfp}</span><ExternalLink size={16} strokeWidth={2.2} aria-hidden="true" className="shrink-0 -translate-y-0.5 text-blue-600 transition group-hover:text-blue-700" /></button> : "Belum ada nomor faktur"}</span><span className="text-sm font-normal leading-5 text-slate-600">{invoice ? <>{dateText(invoice.invoice_date)} <span className="px-1">·</span> {group.supplierName} <span className="px-1">·</span> {group.entries.length} barang</> : `${group.entries.length} barang belum tertaut ke faktur`}</span></div>
                 </div>
                 <div className="flex flex-1 flex-wrap items-center justify-end gap-x-6 gap-y-2">
-                  <div className="flex shrink-0 items-center gap-3"><div className="flex flex-wrap items-center gap-2">{invoice?.file_replacement_pending ? <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800" title="Versi file faktur dibatalkan dan sedang menunggu faktur pengganti."><span className="font-semibold">Versi dibatalkan</span><span aria-hidden="true">·</span>menunggu faktur pengganti</span> : <StatusBadge value={invoiceTableStatus(invoice)} />}</div>{invoice && canWork && <><span aria-hidden="true" className="h-6 border-l border-slate-300" /><div className="flex items-center gap-2"><Button variant="secondary" title={`Edit atau revisi faktur ${invoice.nsfp}`} className="px-2.5 py-1.5 text-xs" disabled={!canEdit} onClick={() => onEditInvoice(invoice.id)}><Pencil size={13} />Edit</Button><Button variant="dangerGhost" title={canDelete ? `Hapus draft ${invoice.nsfp}` : "Hanya faktur berstatus Draft yang bisa dihapus agar riwayat faktur tetap terjaga."} className="px-2.5 py-1.5 text-xs" disabled={!canDelete} onClick={() => void deleteDraftInvoice(invoice)}><Trash2 size={13} />Delete</Button></div></>}</div>
+                  <div className="flex shrink-0 items-center gap-3"><div className="flex flex-wrap items-center gap-2">{invoice?.file_replacement_pending ? <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800" title="Versi file faktur dibatalkan dan sedang menunggu faktur pengganti."><span className="font-semibold">Versi dibatalkan</span><span aria-hidden="true">·</span>menunggu faktur pengganti</span> : <StatusBadge value={invoiceTableStatus(invoice)} />}</div>{invoice && <><span aria-hidden="true" className="h-6 border-l border-slate-300" /><div className="flex items-center gap-2">{canWork && <Button variant="secondary" title={`Edit atau revisi faktur ${invoice.nsfp}`} className="px-2.5 py-1.5 text-xs" disabled={!canEdit} onClick={() => onEditInvoice(invoice.id)}><Pencil size={13} />Edit</Button>}<Button type="button" variant="secondary" className="px-2.5 py-1.5 text-xs" disabled={!invoice.latest_attachment_id} title={invoice.latest_attachment_id ? `Buka file faktur ${invoice.nsfp}` : "File faktur belum tersedia"} onClick={() => setPreviewFile({ id: invoice.latest_attachment_id!, nsfp: invoice.nsfp, original_filename: invoice.latest_attachment_filename || `${invoice.nsfp}.pdf`, mime_type: invoice.latest_attachment_mime_type || "application/pdf" })}><Eye size={13} />Faktur</Button>{canWork && <Button variant="dangerGhost" title={canDelete ? `Hapus faktur ${invoice.nsfp}` : "Faktur ini sudah digantikan sehingga tidak dapat dihapus."} className="px-2.5 py-1.5 text-xs" disabled={!canDelete} onClick={() => void deleteInvoice(invoice, group.entries.length)}><Trash2 size={13} />Delete</Button>}</div></>}</div>
                 </div>
               </div>
             </td>

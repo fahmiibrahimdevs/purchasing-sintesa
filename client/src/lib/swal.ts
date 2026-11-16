@@ -111,4 +111,67 @@ export async function promptText({
   return result.isConfirmed ? String(result.value || "").trim() : null;
 }
 
+
+export async function confirmDeleteWithKeyword({
+  title,
+  html,
+  keyword,
+  confirmButtonText = "Hapus Faktur Ini Secara Permanen",
+  cancelButtonText = "Batal",
+}: {
+  title: string;
+  html?: string;
+  keyword: string;
+  confirmButtonText?: string;
+  cancelButtonText?: string;
+}): Promise<boolean> {
+  const step1 = await Swal.fire({
+    icon: "warning",
+    title,
+    html,
+    showCancelButton: true,
+    reverseButtons: true,
+    confirmButtonText: "Ya, saya mengerti konsekuensinya",
+    cancelButtonText,
+    buttonsStyling: false,
+    customClass: {
+      ...modalClass,
+      confirmButton: modalClass.denyButton,
+    },
+  });
+  if (!step1.isConfirmed) return false;
+
+  const step2 = await Swal.fire({
+    icon: "warning",
+    title: "Konfirmasi Nomor Faktur",
+    html: `
+      <div class="text-left text-sm text-slate-600">
+        <p class="mb-2">Untuk memastikan dan menghindari salah hapus, ketik nomor faktur di bawah ini:</p>
+        <div class="my-2 select-all rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-center font-mono text-base font-bold text-slate-900 tracking-wide">
+          ${keyword}
+        </div>
+      </div>
+    `,
+    input: "text",
+    inputPlaceholder: `Ketik ${keyword}`,
+    showCancelButton: true,
+    reverseButtons: true,
+    confirmButtonText,
+    cancelButtonText,
+    buttonsStyling: false,
+    customClass: {
+      ...modalClass,
+      confirmButton: modalClass.denyButton,
+    },
+    inputValidator: (value) => {
+      if (!value || value.trim() !== keyword.trim()) {
+        return "Nomor faktur yang diketik tidak cocok.";
+      }
+      return undefined;
+    },
+  });
+
+  return step2.isConfirmed;
+}
+
 export default Swal;

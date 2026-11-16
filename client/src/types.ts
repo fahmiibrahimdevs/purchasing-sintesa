@@ -26,6 +26,7 @@ export type PurchaseDocument = {
   supplier_document_no?: string; purchase_date: string; source_document_type: string; price_tax_mode?: "INCLUSIVE" | "EXCLUSIVE"; header_subtotal?: string | number;
   header_tax_amount?: string | number; header_total?: string | number; notes?: string; record_status: string;
   item_count: number; total_amount: string | number; items: PurchaseItem[];
+  source_attachment_count?: number;
 };
 export type InvoiceAllocation = { id?: string; purchase_item_id: string; item_code?: string; item_name?: string; allocated_quantity?: string | number; allocated_dpp: string | number; allocated_ppn: string | number; allocated_other_tax?: string | number; allocated_total: string | number; allocation_note?: string };
 export type InvoiceLine = { id: string; line_no: number; description: string; quantity?: string | number; uom?: string; dpp_amount: string | number; ppn_amount: string | number; other_tax_amount: string | number; line_total: string | number; allocations?: InvoiceAllocation[] };
