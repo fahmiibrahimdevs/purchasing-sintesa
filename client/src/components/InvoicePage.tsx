@@ -369,7 +369,7 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify, navH
           <button type="button" aria-pressed={view === "flat"} onClick={() => { setView("flat"); setGroupsPage(1); }} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold ${view === "flat" ? "bg-white text-blue-700 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}><Table2 size={15} />Per barang</button>
         </div>
       </div>
-      <div className="flex max-w-full items-center gap-2 overflow-x-auto border-t border-slate-100 pt-2 pb-1">
+      <div className="flex max-w-full items-center gap-2 overflow-x-auto border-t border-slate-100 pt-2 pb-0.5">
         <span className="shrink-0 text-xs font-semibold text-slate-500">Status Faktur</span>
         <div role="group" aria-label="Filter status faktur" className="flex shrink-0 gap-1">
           {[
@@ -399,8 +399,7 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify, navH
             );
           })}
         </div>
-      </div>
-      <div className="flex max-w-full items-center gap-2 overflow-x-auto border-t border-slate-100 pt-2 pb-0.5">
+        <span aria-hidden="true" className="shrink-0 px-1 text-slate-300">|</span>
         <span className="shrink-0 text-xs font-semibold text-slate-500">Filter Project</span>
         <div role="group" aria-label="Filter project" className="flex shrink-0 gap-1">
           {[
