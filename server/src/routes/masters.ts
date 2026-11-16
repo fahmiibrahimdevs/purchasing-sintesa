@@ -16,7 +16,7 @@ router.get("/suppliers", async (c) => {
   return c.json(rows);
 });
 
-router.post("/suppliers", allowRoles("ADMIN"), async (c) => {
+router.post("/suppliers", allowRoles("PURCHASING", "ADMIN"), async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const name = String(body.name || "").trim();
   const code = String(body.supplier_code || `SUP-${crypto.randomUUID().slice(0, 8)}`).trim().toUpperCase();
@@ -31,7 +31,7 @@ router.post("/suppliers", allowRoles("ADMIN"), async (c) => {
   return c.json({ id, supplier_code: code, name, default_invoice_requirement: defaultInvoiceRequirement }, 201);
 });
 
-router.put("/suppliers/:id", allowRoles("ADMIN"), async (c) => {
+router.put("/suppliers/:id", allowRoles("PURCHASING", "ADMIN"), async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const id = c.req.param("id");
   const [beforeRows] = await pool.execute("SELECT * FROM suppliers WHERE id = ?", [id]);
@@ -47,7 +47,7 @@ router.put("/suppliers/:id", allowRoles("ADMIN"), async (c) => {
   return c.json({ id, ...updated });
 });
 
-router.delete("/suppliers/:id", allowRoles("ADMIN"), async (c) => {
+router.delete("/suppliers/:id", allowRoles("PURCHASING", "ADMIN"), async (c) => {
   const id = c.req.param("id");
   let outcome: { status: 204 | 404 | 409; error?: string };
   try {
@@ -78,7 +78,7 @@ router.get("/projects", async (c) => {
   return c.json(rows);
 });
 
-router.post("/projects", allowRoles("ADMIN"), async (c) => {
+router.post("/projects", allowRoles("PURCHASING", "ADMIN"), async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const name = String(body.name || "").trim();
   const code = String(body.project_code || `PRJ-${crypto.randomUUID().slice(0, 8)}`).trim().toUpperCase();
@@ -91,7 +91,7 @@ router.post("/projects", allowRoles("ADMIN"), async (c) => {
   return c.json({ id, project_code: code, name }, 201);
 });
 
-router.put("/projects/:id", allowRoles("ADMIN"), async (c) => {
+router.put("/projects/:id", allowRoles("PURCHASING", "ADMIN"), async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const id = c.req.param("id");
   const [rows] = await pool.execute("SELECT * FROM projects WHERE id = ?", [id]);
@@ -106,7 +106,7 @@ router.put("/projects/:id", allowRoles("ADMIN"), async (c) => {
   return c.json({ id, ...updated });
 });
 
-router.delete("/projects/:id", allowRoles("ADMIN"), async (c) => {
+router.delete("/projects/:id", allowRoles("PURCHASING", "ADMIN"), async (c) => {
   const id = c.req.param("id");
   let outcome: { status: 204 | 404 | 409; error?: string };
   try {
@@ -160,16 +160,27 @@ router.post("/users", allowRoles("ADMIN"), async (c) => {
 router.patch("/users/:id", allowRoles("ADMIN"), async (c) => {
   const id = c.req.param("id");
   const body = await c.req.json().catch(() => ({}));
-  if (id === c.get("user").id && (body.is_active === 0 || body.is_active === false)) return c.json({ error: "Akun Admin yang sedang digunakan tidak dapat dinonaktifkan." }, 400);
+  const current = c.get("user");
+  if (id === current.id && (body.is_active === 0 || body.is_active === false)) return c.json({ error: "Akun Admin yang sedang digunakan tidak dapat dinonaktifkan." }, 400);
+  if (id === current.id && body.role && body.role !== "ADMIN") return c.json({ error: "Akun Admin yang sedang digunakan tidak dapat mengubah perannya sendiri." }, 400);
   if (body.role && !["PURCHASING", "TAX_STAFF", "ADMIN"].includes(body.role)) return c.json({ error: "Role tidak valid." }, 400);
   const [rows] = await pool.execute("SELECT id, name, email, role, is_active FROM users WHERE id=?", [id]);
   const before = (rows as any[])[0];
   if (!before) return c.json({ error: "Pengguna tidak ditemukan." }, 404);
-  const next = { name: String(body.name ?? before.name).trim(), email: String(body.email ?? before.email).trim().toLowerCase(), role: body.role ?? before.role, is_active: body.is_active ?? before.is_active };
-  await withTransaction(async (conn) => {
-    await conn.execute("UPDATE users SET name=?, email=?, role=?, is_active=? WHERE id=?", [next.name, next.email, next.role, next.is_active ? 1 : 0, id]);
-    await writeAudit({ userId: c.get("user").id, action: "UPDATE", entityType: "USER", entityId: id, oldValues: before, newValues: next }, conn);
-  });
+  const nextEmail = body.email !== undefined ? String(body.email).trim().toLowerCase() : before.email;
+  if (!nextEmail || nextEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail)) {
+    return c.json({ error: "Alamat email tidak valid." }, 400);
+  }
+  const next = { name: String(body.name ?? before.name).trim(), email: nextEmail, role: body.role ?? before.role, is_active: body.is_active ?? before.is_active };
+  try {
+    await withTransaction(async (conn) => {
+      await conn.execute("UPDATE users SET name=?, email=?, role=?, is_active=? WHERE id=?", [next.name, next.email, next.role, next.is_active ? 1 : 0, id]);
+      await writeAudit({ userId: current.id, action: "UPDATE", entityType: "USER", entityId: id, oldValues: before, newValues: next }, conn);
+    });
+  } catch (error: any) {
+    if (error?.code === "ER_DUP_ENTRY") return c.json({ error: "Email tersebut sudah digunakan oleh akun lain." }, 409);
+    throw error;
+  }
   return c.json({ id, ...next });
 });
 

@@ -31,10 +31,8 @@ function replacementIdFromLocation() {
 }
 
 function canAccessPage(role: User["role"], page: Page) {
-  if (role === "TAX_STAFF" && page === "purchases") return false;
-  if (role === "PURCHASING" && page === "invoice-new") return false;
-  if (role === "PURCHASING" && page === "invoice-edit") return false;
-  if (role !== "ADMIN" && ["settings", "suppliers", "projects"].includes(page)) return false;
+  if (role === "PURCHASING" && (page === "invoice-new" || page === "invoice-edit")) return false;
+  if (role !== "ADMIN" && page === "settings") return false;
   return true;
 }
 
@@ -104,7 +102,7 @@ function Workspace() {
 
   const navItems: Array<{ id: Page; label: string; icon: any; visible: boolean }> = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard, visible: true },
-    { id: "purchases", label: "Pembelian", icon: ShoppingBag, visible: user.role !== "TAX_STAFF" },
+    { id: "purchases", label: "Pembelian", icon: ShoppingBag, visible: true },
     { id: "invoices", label: "Faktur Pajak", icon: ReceiptText, visible: true },
     { id: "settings", label: "Pengaturan", icon: Settings2, visible: user.role === "ADMIN" },
   ];
@@ -136,7 +134,7 @@ function Workspace() {
         <p className={`mb-2 px-5 text-[11px] font-semibold uppercase tracking-[.1em] text-slate-500 ${sidebarCollapsed ? "sr-only" : ""}`}>Dashboard</p>
         {visibleNavItems.filter((item) => item.id === "dashboard").map((item) => renderNavItem(item, sidebarCollapsed))}
         <p className={`mb-2 mt-6 px-5 text-[11px] font-semibold uppercase tracking-[.1em] text-slate-500 ${sidebarCollapsed ? "sr-only" : ""}`}>Menu Utama</p>
-        <div className="space-y-1">{visibleNavItems.filter((item) => !["dashboard", "settings"].includes(item.id)).map((item) => renderNavItem(item, sidebarCollapsed))}{user.role === "ADMIN" && renderMasterData(sidebarCollapsed)}{visibleNavItems.filter((item) => item.id === "settings").map((item) => renderNavItem(item, sidebarCollapsed))}</div>
+        <div className="space-y-1">{visibleNavItems.filter((item) => !["dashboard", "settings"].includes(item.id)).map((item) => renderNavItem(item, sidebarCollapsed))}{renderMasterData(sidebarCollapsed)}{visibleNavItems.filter((item) => item.id === "settings").map((item) => renderNavItem(item, sidebarCollapsed))}</div>
       </nav>
       {!sidebarCollapsed && <div className="border-t border-slate-100 px-5 py-4"><p className="text-[10px] font-medium text-slate-400">Procura · Workspace Pembelian</p></div>}
     </aside>
@@ -148,7 +146,7 @@ function Workspace() {
         </div>
       </div>
     </header>
-    {sidebarOpen && <><button className="fixed inset-0 z-40 bg-slate-950/35 lg:hidden" aria-label="Tutup navigasi" onClick={() => setSidebarOpen(false)} /><aside className="fixed inset-y-0 left-0 z-50 flex w-[min(84vw,320px)] flex-col border-r border-slate-200 bg-white shadow-2xl lg:hidden"><div className="flex h-[70px] shrink-0 items-center justify-between border-b border-slate-100 px-5"> <div className="flex items-center gap-3">{logo}<span><b className="block text-sm font-bold tracking-[.16em] text-slate-900">PROCURA</b><small className="block text-[9px] font-medium uppercase tracking-wider text-slate-400">Purchasing Workspace</small></span></div><button onClick={() => setSidebarOpen(false)} className="grid h-9 w-9 place-items-center rounded-lg text-slate-500 hover:bg-slate-100" aria-label="Tutup navigasi"><X size={18} /></button></div><nav className="flex-1 overflow-y-auto px-4 py-5"><p className="mb-2 px-3 text-[11px] font-semibold uppercase tracking-[.1em] text-slate-500">Dashboard</p><div>{visibleNavItems.filter((item) => item.id === "dashboard").map((item) => renderNavItem(item, false, true))}</div><p className="mb-2 mt-6 px-3 text-[11px] font-semibold uppercase tracking-[.1em] text-slate-500">Menu Utama</p><div className="space-y-1">{visibleNavItems.filter((item) => !["dashboard", "settings"].includes(item.id)).map((item) => renderNavItem(item, false, true))}{user.role === "ADMIN" && renderMasterData(false, true)}{visibleNavItems.filter((item) => item.id === "settings").map((item) => renderNavItem(item, false, true))}</div></nav></aside></>}
+    {sidebarOpen && <><button className="fixed inset-0 z-40 bg-slate-950/35 lg:hidden" aria-label="Tutup navigasi" onClick={() => setSidebarOpen(false)} /><aside className="fixed inset-y-0 left-0 z-50 flex w-[min(84vw,320px)] flex-col border-r border-slate-200 bg-white shadow-2xl lg:hidden"><div className="flex h-[70px] shrink-0 items-center justify-between border-b border-slate-100 px-5"> <div className="flex items-center gap-3">{logo}<span><b className="block text-sm font-bold tracking-[.16em] text-slate-900">PROCURA</b><small className="block text-[9px] font-medium uppercase tracking-wider text-slate-400">Purchasing Workspace</small></span></div><button onClick={() => setSidebarOpen(false)} className="grid h-9 w-9 place-items-center rounded-lg text-slate-500 hover:bg-slate-100" aria-label="Tutup navigasi"><X size={18} /></button></div><nav className="flex-1 overflow-y-auto px-4 py-5"><p className="mb-2 px-3 text-[11px] font-semibold uppercase tracking-[.1em] text-slate-500">Dashboard</p><div>{visibleNavItems.filter((item) => item.id === "dashboard").map((item) => renderNavItem(item, false, true))}</div><p className="mb-2 mt-6 px-3 text-[11px] font-semibold uppercase tracking-[.1em] text-slate-500">Menu Utama</p><div className="space-y-1">{visibleNavItems.filter((item) => !["dashboard", "settings"].includes(item.id)).map((item) => renderNavItem(item, false, true))}{renderMasterData(false, true)}{visibleNavItems.filter((item) => item.id === "settings").map((item) => renderNavItem(item, false, true))}</div></nav></aside></>}
     <div className={`min-h-[calc(100vh-70px)] transition-[margin] duration-200 ${sidebarCollapsed ? "lg:ml-[76px]" : "lg:ml-[250px]"}`}>
       <div className="sticky top-[70px] z-20 flex min-h-[72px] items-center justify-between gap-4 border-b border-slate-200 bg-white px-4 py-3 shadow-sm sm:px-6 lg:px-8"><h1 className="text-lg font-semibold text-slate-800">{pageLabel}</h1><div className="flex shrink-0 items-center gap-2 text-[11px] text-slate-500"><span className="text-blue-700">Dashboard</span><span>/</span><span>{pageLabel === "Dashboard" ? "Utama" : pageLabel}</span></div></div>
       <div className="mx-auto flex min-h-[calc(100vh-142px)] w-full max-w-[2304px] flex-col"><main className="w-full min-w-0 flex-1 px-3 py-5 sm:px-6 sm:py-7 2xl:px-10">
@@ -157,7 +155,7 @@ function Workspace() {
         {page === "invoices" && <InvoicePage user={user} notify={notify} onCreateInvoice={(item) => { setReplacementInvoiceId(""); setInitialInvoiceItem(item || null); navigate("invoice-new"); }} onEditInvoice={(id) => { setReplacementInvoiceId(""); setEditingInvoiceId(id); setPage("invoice-edit"); window.history.pushState({}, "", `${window.location.pathname}${window.location.search}#invoices/edit/${id}`); }} />}
         {page === "invoice-new" && <InvoiceCreatePage initialItem={initialInvoiceItem} replacementInvoiceId={replacementInvoiceId} userName={user.name} notify={notify} onBack={() => { setInitialInvoiceItem(null); setReplacementInvoiceId(""); navigate("invoices"); }} />}
         {page === "invoice-edit" && <InvoiceEditPage invoiceId={editingInvoiceId} userName={user.name} notify={notify} onBack={() => navigate("invoices")} onCreateReplacement={(id) => { setInitialInvoiceItem(null); setReplacementInvoiceId(id); setPage("invoice-new"); window.history.pushState({}, "", `${window.location.pathname}${window.location.search}#invoices/new?replacement=${encodeURIComponent(id)}`); }} />}
-        {(page === "suppliers" || page === "projects") && <MasterDataPage section={page} notify={notify} />}
+        {(page === "suppliers" || page === "projects") && <MasterDataPage section={page} user={user} notify={notify} />}
         {page === "settings" && <SettingsPage user={user} notify={notify} />}
         {page === "account" && <AccountSettingsPage user={user} onUserUpdated={setUser} notify={notify} />}
       </main><footer className="px-4 pb-5 text-center text-xs text-slate-500">Procura · Workspace Pembelian & Faktur Pajak</footer></div>

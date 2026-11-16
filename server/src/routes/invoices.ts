@@ -244,11 +244,29 @@ router.post("/tax-invoices", roles, async (c) => {
         if (!old || old.supplier_id !== body.supplier_id || ["CANCELLED", "REPLACED"].includes(old.lifecycle_status)) throw new Error("Faktur lama tidak valid untuk diganti.");
         const [replacementRows] = await conn.execute("SELECT id FROM tax_invoices WHERE replaces_tax_invoice_id=? AND lifecycle_status<>'CANCELLED' LIMIT 1 FOR UPDATE", [body.replaces_tax_invoice_id]);
         if ((replacementRows as any[]).length) throw new Error("Faktur pengganti untuk faktur ini sudah dibuat.");
+
+        await conn.execute("UPDATE tax_invoices SET lifecycle_status='REPLACED' WHERE id=?", [body.replaces_tax_invoice_id]);
+        await recordEvent(conn, {
+          invoiceId: body.replaces_tax_invoice_id,
+          eventType: "REPLACED",
+          actorId: c.get("user").id,
+          oldValues: { lifecycle_status: old.lifecycle_status },
+          newValues: { lifecycle_status: "REPLACED" },
+          relatedInvoiceId: invoiceId,
+        });
+        await writeAudit({
+          userId: c.get("user").id,
+          action: "MARK_REPLACED",
+          entityType: "TAX_INVOICE",
+          entityId: body.replaces_tax_invoice_id,
+          oldValues: { lifecycle_status: old.lifecycle_status },
+          newValues: { lifecycle_status: "REPLACED", replacement_invoice_id: invoiceId },
+        }, conn);
       }
       await conn.execute(
         `INSERT INTO tax_invoices (id, supplier_id, nsfp, invoice_date, tax_period_year, tax_period_month,
          dpp_amount, ppn_amount, other_tax_amount, invoice_total, invoice_kind, replaces_tax_invoice_id, lifecycle_status, created_by, notes)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT', ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'VERIFIED', ?, ?)`,
         [invoiceId, body.supplier_id, String(body.nsfp).trim(), invoiceDate, periodYear, periodMonth,
           header.dpp_amount, header.ppn_amount, header.other_tax_amount, header.invoice_total, invoiceKind,
           invoiceKind === "REPLACEMENT" ? body.replaces_tax_invoice_id : null, c.get("user").id, body.notes || null]
@@ -339,7 +357,7 @@ router.put("/tax-invoices/:id", roles, async (c) => {
 
   try {
     await withTransaction(async (conn) => {
-      const [invoiceRows] = await conn.execute("SELECT id, supplier_id, lifecycle_status FROM tax_invoices WHERE id=? FOR UPDATE", [id]);
+      const [invoiceRows] = await conn.execute("SELECT * FROM tax_invoices WHERE id=? FOR UPDATE", [id]);
       const invoice = (invoiceRows as any[])[0];
       if (!invoice || ["CANCELLED", "REPLACED"].includes(invoice.lifecycle_status)) throw new Error("Faktur tidak ditemukan atau sudah tidak dapat diedit.");
       const [duplicateRows] = await conn.execute("SELECT id FROM tax_invoices WHERE supplier_id=? AND nsfp=? AND id<>? LIMIT 1", [invoice.supplier_id, nsfp, id]);
@@ -412,14 +430,34 @@ router.put("/tax-invoices/:id", roles, async (c) => {
           );
         }
 
-        // Koreksi barang adalah pembetulan data internal; ini tidak membuat versi file atau event revisi.
         await conn.execute(
           "UPDATE tax_invoices SET nsfp=?, invoice_date=?, tax_period_year=?, tax_period_month=?, dpp_amount=?, ppn_amount=?, other_tax_amount=?, invoice_total=? WHERE id=?",
           [nsfp, invoiceDate, taxPeriodYear, taxPeriodMonth, roundMoney(totals.dpp).toFixed(2), roundMoney(totals.ppn).toFixed(2), roundMoney(totals.otherTax).toFixed(2), roundMoney(totals.total).toFixed(2), id]
         );
+        await recordEvent(conn, {
+          invoiceId: id,
+          eventType: "UPDATED",
+          actorId: c.get("user").id,
+          newValues: { nsfp, invoice_date: invoiceDate, tax_period_year: taxPeriodYear, tax_period_month: taxPeriodMonth, item_count: updatedItems.length },
+        });
+        await writeAudit({
+          userId: c.get("user").id, action: "UPDATE", entityType: "TAX_INVOICE", entityId: id,
+          oldValues: { nsfp: invoice.nsfp, invoice_date: invoice.invoice_date, tax_period_year: invoice.tax_period_year, tax_period_month: invoice.tax_period_month, dpp_amount: invoice.dpp_amount, ppn_amount: invoice.ppn_amount, invoice_total: invoice.invoice_total },
+          newValues: { nsfp, invoice_date: invoiceDate, tax_period_year: taxPeriodYear, tax_period_month: taxPeriodMonth, dpp_amount: roundMoney(totals.dpp).toFixed(2), ppn_amount: roundMoney(totals.ppn).toFixed(2), invoice_total: roundMoney(totals.total).toFixed(2) },
+        }, conn);
       } else {
-        // Perubahan metadata internal tidak membuat versi file atau event revisi.
         await conn.execute("UPDATE tax_invoices SET nsfp=?, invoice_date=?, tax_period_year=?, tax_period_month=? WHERE id=?", [nsfp, invoiceDate, taxPeriodYear, taxPeriodMonth, id]);
+        await recordEvent(conn, {
+          invoiceId: id,
+          eventType: "UPDATED",
+          actorId: c.get("user").id,
+          newValues: { nsfp, invoice_date: invoiceDate, tax_period_year: taxPeriodYear, tax_period_month: taxPeriodMonth },
+        });
+        await writeAudit({
+          userId: c.get("user").id, action: "UPDATE", entityType: "TAX_INVOICE", entityId: id,
+          oldValues: { nsfp: invoice.nsfp, invoice_date: invoice.invoice_date, tax_period_year: invoice.tax_period_year, tax_period_month: invoice.tax_period_month },
+          newValues: { nsfp, invoice_date: invoiceDate, tax_period_year: taxPeriodYear, tax_period_month: taxPeriodMonth },
+        }, conn);
       }
     });
   } catch (error: any) {

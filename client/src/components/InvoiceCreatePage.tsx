@@ -273,7 +273,6 @@ export function InvoiceCreatePage({ initialItem, replacementInvoiceId, onBack, n
       form.append("owner_id", invoice.id);
       if (replacementReason.trim()) form.append("revision_reason", replacementReason.trim());
       await api("/api/attachments", { method: "POST", body: form });
-      await api(`/api/tax-invoices/${invoice.id}/submit-review`, { method: "POST" });
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["invoices"] }),
         queryClient.invalidateQueries({ queryKey: ["invoice-queue"] }),

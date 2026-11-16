@@ -234,11 +234,18 @@ router.get("/reports/purchases", async (c) => {
 router.get("/reports/pending", allowRoles("TAX_STAFF", "ADMIN"), async (c) => {
   const page = Math.max(1, Number(c.req.query("page") || 1));
   const pageSize = Math.min(500, Math.max(1, Number(c.req.query("pageSize") || 50)));
-  const from = c.req.query("from"); const to = c.req.query("to");
-  const supplierId = c.req.query("supplierId"); const projectId = c.req.query("projectId");
+  const from = c.req.query("from")?.trim() || undefined;
+  const to = c.req.query("to")?.trim() || undefined;
+  const supplierId = c.req.query("supplierId")?.trim() || undefined;
+  const projectId = c.req.query("projectId")?.trim() || undefined;
+  const clauses = ["d.record_status<>'CANCELLED'"];
+  const params: any[] = [];
+  if (from) { clauses.push("d.purchase_date>=?"); params.push(from); }
+  if (to) { clauses.push("d.purchase_date<=?"); params.push(to); }
+  if (supplierId) { clauses.push("d.supplier_id=?"); params.push(supplierId); }
   const [docRows] = await pool.execute(
-    `SELECT d.id FROM purchase_documents d WHERE d.record_status<>'CANCELLED' ${from ? "AND d.purchase_date>=?" : ""} ${to ? "AND d.purchase_date<=?" : ""} ${supplierId ? "AND d.supplier_id=?" : ""}`,
-    [from, to, supplierId].filter((value) => value !== undefined)
+    `SELECT d.id FROM purchase_documents d WHERE ${clauses.join(" AND ")}`,
+    params
   );
   const allItems = await itemsForDocuments((docRows as any[]).map((row) => row.id));
   const filtered = allItems.filter((item) => item.invoice_requirement !== "NOT_REQUIRED"
