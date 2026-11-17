@@ -375,9 +375,9 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify, navH
     <SummaryCards autoFit cards={[
       { label: "Faktur tercatat bulan ini", value: invoiceSummary?.active_invoices_this_month ?? 0, unit: "faktur", detail: "Jumlah faktur bertanggal bulan ini", icon: ReceiptText, tone: "blue", loading: invoiceSummaryLoading },
       { label: "Nilai PPN bulan ini", value: money(invoiceSummary?.active_invoice_ppn_this_month), detail: "Total PPN faktur bulan ini", icon: CircleDollarSign, tone: "emerald", loading: invoiceSummaryLoading },
-      { label: "Barang belum ada faktur", value: itemsWithoutInvoice, unit: "barang", detail: "Barang wajib faktur yang belum tertaut", icon: FileWarning, tone: "amber", loading: coverageLoading, onReview: () => { setStatusFilter("unlinked"); setGroupsPage(1); } },
-      { label: "Faktur belum ada lampiran", value: invoiceSummary?.invoices_without_attachment ?? 0, unit: "faktur", detail: "File PDF belum diunggah", icon: FileUp, tone: "orange", loading: invoiceSummaryLoading, onReview: () => { setStatusFilter("missing_file"); setGroupsPage(1); } },
-      { label: "Menunggu faktur pengganti", value: invoiceSummary?.replacement_invoices_pending ?? 0, unit: "faktur", detail: "Versi terakhir dibatalkan dan belum diganti", icon: FileClock, tone: "violet", loading: invoiceSummaryLoading, onReview: () => { setStatusFilter("replacement"); setGroupsPage(1); } },
+      { label: "Barang belum ada faktur", value: itemsWithoutInvoice, unit: "barang", detail: "Belum tertaut ke faktur", icon: FileWarning, tone: "amber", loading: coverageLoading, onReview: () => { setStatusFilter("unlinked"); setGroupsPage(1); } },
+      { label: "Faktur belum ada lampiran", value: invoiceSummary?.invoices_without_attachment ?? 0, unit: "faktur", detail: "PDF belum diunggah", icon: FileUp, tone: "orange", loading: invoiceSummaryLoading, onReview: () => { setStatusFilter("missing_file"); setGroupsPage(1); } },
+      { label: "Menunggu faktur pengganti", value: invoiceSummary?.replacement_invoices_pending ?? 0, unit: "faktur", detail: "Versi terakhir dibatalkan", icon: FileClock, tone: "violet", loading: invoiceSummaryLoading, onReview: () => { setStatusFilter("replacement"); setGroupsPage(1); } },
     ]} />
     <section className="mb-4 space-y-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-card">
       <div className="flex flex-col gap-2 xl:flex-row xl:items-center">

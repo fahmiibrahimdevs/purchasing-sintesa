@@ -119,20 +119,28 @@ export function SummaryCards({ cards, columns = 4, autoFit = false }: { cards: S
     orange: "bg-orange-500 text-white shadow-orange-100",
   };
   const columnClass = columns === 2 ? "sm:grid-cols-2 xl:grid-cols-2" : columns === 3 ? "sm:grid-cols-2 xl:grid-cols-3" : "sm:grid-cols-2 xl:grid-cols-4";
-  return <div className={`mb-5 grid gap-3 ${autoFit ? "" : columnClass}`} style={autoFit ? { gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))" } : undefined}>{cards.map((card) => <article key={card.label} className="relative flex min-h-[88px] min-w-0 items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-3.5 py-3 shadow-card">
-    <div className="flex min-w-0 items-center gap-3">
+  return <div className={`mb-5 grid gap-3 ${autoFit ? "" : columnClass}`} style={autoFit ? { gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))" } : undefined}>{cards.map((card) => <article
+    key={card.label}
+    onClick={card.onReview ? () => card.onReview?.() : undefined}
+    className={`relative flex min-h-[88px] min-w-0 items-center justify-between gap-2.5 rounded-2xl border border-slate-200 bg-white px-3.5 py-3 shadow-card ${
+      card.onReview ? "cursor-pointer transition hover:border-blue-300 hover:shadow-md" : ""
+    }`}
+  >
+    <div className="flex min-w-0 flex-1 items-center gap-3">
       <span className={`grid h-11 w-11 shrink-0 place-items-center rounded-xl shadow-sm ${tones[card.tone || "blue"]}`}><card.icon size={20} /></span>
-      <div className="min-w-0">
-        <p className="text-xs font-semibold text-slate-600">{card.label}</p>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-xs font-semibold text-slate-600" title={card.label}>{card.label}</p>
         <div className="mt-0.5 flex min-h-6 items-center gap-1.5">
           {card.loading ? <Skeleton className="h-4 w-10" /> : <><span className="truncate text-lg font-bold leading-6 text-slate-900">{card.value}</span>{card.unit && <span className="shrink-0 text-xs text-slate-500">{card.unit}</span>}</>}
         </div>
-        <p className="truncate text-[11px] text-slate-500">
+        <div className="flex min-w-0 items-center text-[11px] text-slate-500">
           {card.loading ? <Skeleton className="h-3 w-28" /> : (
             <>
-              <span>{card.detail}</span>
+              <span className="truncate min-w-0" title={typeof card.detail === "string" ? card.detail : undefined}>
+                {card.detail}
+              </span>
               {card.onReview && (
-                <>
+                <span className="shrink-0 flex items-center">
                   <span className="mx-1 text-slate-300">·</span>
                   <button
                     type="button"
@@ -144,14 +152,33 @@ export function SummaryCards({ cards, columns = 4, autoFit = false }: { cards: S
                   >
                     {card.reviewLabel || "Tinjau"}
                   </button>
-                </>
+                </span>
               )}
             </>
           )}
-        </p>
+        </div>
       </div>
     </div>
-    {card.badge && <div className="shrink-0 pl-1">{card.badge}</div>}
+    {card.badge && (
+      <div className="shrink-0 pl-1">
+        {card.onReview ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              card.onReview?.();
+            }}
+            title={`Tinjau ${card.label}`}
+            aria-label={`Tinjau ${card.label}`}
+            className="cursor-pointer transition hover:scale-105 active:scale-95"
+          >
+            {card.badge}
+          </button>
+        ) : (
+          card.badge
+        )}
+      </div>
+    )}
   </article>)}</div>;
 }
 
