@@ -108,16 +108,16 @@ function CategoryPieCard({ data, year }: { data: PieDatum[]; year: number }) {
 }
 
 function MonthlyBarChart({ title, description, months, series }: { title: string; description: string; months: MonthlyPurchase[]; series: ChartSeries[] }) {
-  const width = 960;
-  const height = 300;
-  const margin = { top: 20, right: 20, bottom: 42, left: 82 };
+  const width = 640;
+  const height = 260;
+  const margin = { top: 20, right: 16, bottom: 34, left: 74 };
   const chartWidth = width - margin.left - margin.right;
   const chartHeight = height - margin.top - margin.bottom;
   const maxValue = Math.max(0, ...months.flatMap((month) => series.map((item) => Number(month[item.key] || 0))));
   const safeMax = maxValue || 1;
   const groupWidth = chartWidth / 12;
-  const barGap = series.length > 2 ? 2 : 4;
-  const barWidth = Math.max(4, Math.min(22, (groupWidth * 0.68 - barGap * (series.length - 1)) / series.length));
+  const barGap = series.length > 2 ? 2 : 3;
+  const barWidth = Math.max(4, Math.min(16, (groupWidth * 0.65 - barGap * (series.length - 1)) / series.length));
   const barsWidth = barWidth * series.length + barGap * (series.length - 1);
 
   return <section className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-card">
@@ -125,14 +125,14 @@ function MonthlyBarChart({ title, description, months, series }: { title: string
       <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-blue-50 text-blue-700"><BarChart3 size={18} /></span>
       <div><h3 className="text-sm font-semibold text-slate-900">{title}</h3><p className="mt-0.5 text-xs text-slate-500">{description}</p></div>
     </div>
-    <div className="overflow-x-auto px-3 pt-3">
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={title} className="h-[260px] w-full min-w-[720px]">
+    <div className="px-3 pt-3">
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={title} className="h-auto w-full">
         {[0, 1, 2, 3, 4].map((tick) => {
           const value = safeMax * tick / 4;
           const y = margin.top + chartHeight - chartHeight * tick / 4;
           return <g key={tick}>
             <line x1={margin.left} x2={width - margin.right} y1={y} y2={y} stroke="#e2e8f0" strokeDasharray={tick === 0 ? undefined : "3 4"} />
-            <text x={margin.left - 9} y={y + 4} textAnchor="end" fill="#64748b" fontSize="11">{compactRupiah(value)}</text>
+            <text x={margin.left - 8} y={y + 4} textAnchor="end" fill="#64748b" fontSize="11">{compactRupiah(value)}</text>
           </g>;
         })}
         {monthNames.map((monthName, monthIndex) => {
@@ -149,7 +149,7 @@ function MonthlyBarChart({ title, description, months, series }: { title: string
                 <title>{`${monthName} · ${item.label}: ${money(value)}`}</title>
               </rect>;
             })}
-            <text x={center} y={height - 14} textAnchor="middle" fill="#64748b" fontSize="11">{monthName.slice(0, 3)}</text>
+            <text x={center} y={height - 12} textAnchor="middle" fill="#64748b" fontSize="11">{monthName.slice(0, 3)}</text>
           </g>;
         })}
       </svg>
