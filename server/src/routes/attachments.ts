@@ -57,6 +57,11 @@ router.post("/", async (c) => {
   let revisionReason: string | null = null;
   let previousLifecycleStatus = "";
   let versionNsfp = "";
+  const attachmentCategory = ownerType === "TAX_INVOICE"
+    ? "TAX_INVOICE_PDF"
+    : (String(body.category || "").toUpperCase() === "PAYMENT_PROOF" || String(body.category || "").toUpperCase() === "PAYMENT_RECEIPT"
+        ? "PAYMENT_PROOF"
+        : "PURCHASE_SOURCE");
   try {
     await withTransaction(async (conn) => {
       if (ownerType === "TAX_INVOICE") {
@@ -107,11 +112,23 @@ router.post("/", async (c) => {
         );
         versionNumber = Number((countRows as any[])[0]?.version_count || 0) + 1;
       }
+
+      if (ownerType === "PURCHASE") {
+        const [oldRows] = await conn.execute(
+          "SELECT id, storage_path FROM attachments WHERE purchase_document_id=? AND category=?",
+          [ownerId, attachmentCategory]
+        );
+        for (const oldRow of oldRows as any[]) {
+          await conn.execute("DELETE FROM attachments WHERE id=?", [oldRow.id]);
+          await unlink(oldRow.storage_path).catch(() => undefined);
+        }
+      }
+
       await conn.execute(
         `INSERT INTO attachments (id, purchase_document_id, tax_invoice_id, category, storage_path, original_filename, mime_type, file_size, checksum_sha256, uploaded_by, supersedes_attachment_id)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [id, ownerType === "PURCHASE" ? ownerId : null, ownerType === "TAX_INVOICE" ? ownerId : null,
-          ownerType === "PURCHASE" ? "PURCHASE_SOURCE" : "TAX_INVOICE_PDF", storagePath, safeOriginalName, rule.mime, bytes.byteLength, checksum, c.get("user").id,
+          attachmentCategory, storagePath, safeOriginalName, rule.mime, bytes.byteLength, checksum, c.get("user").id,
           ownerType === "TAX_INVOICE" ? supersedesAttachmentId : null]
       );
       if (ownerType === "TAX_INVOICE") {
@@ -130,7 +147,7 @@ router.post("/", async (c) => {
     await unlink(storagePath).catch(() => undefined);
     throw error;
   }
-  return c.json({ id, category: ownerType === "PURCHASE" ? "PURCHASE_SOURCE" : "TAX_INVOICE_PDF", original_filename: safeOriginalName, mime_type: rule.mime, file_size: bytes.byteLength, version: ownerType === "TAX_INVOICE" ? versionNumber : undefined, revision_reason: revisionReason }, 201);
+  return c.json({ id, category: attachmentCategory, original_filename: safeOriginalName, mime_type: rule.mime, file_size: bytes.byteLength, version: ownerType === "TAX_INVOICE" ? versionNumber : undefined, revision_reason: revisionReason }, 201);
 });
 
 router.get("/:id/download", async (c) => {
@@ -175,6 +192,25 @@ router.get("/:id/preview", async (c) => {
 router.get("/purchase/:id", async (c) => {
   const [rows] = await pool.execute("SELECT id, category, original_filename, mime_type, file_size, uploaded_at FROM attachments WHERE purchase_document_id=? ORDER BY uploaded_at DESC", [c.req.param("id")]);
   return c.json(rows);
+});
+
+router.delete("/:id", allowRoles("PURCHASING", "ADMIN"), async (c) => {
+  const id = c.req.param("id");
+  const [rows] = await pool.execute("SELECT * FROM attachments WHERE id=?", [id]);
+  const attachment = (rows as any[])[0];
+  if (!attachment) return c.json({ error: "File tidak ditemukan." }, 404);
+  if (attachment.tax_invoice_id) return c.json({ error: "Lampiran faktur pajak dikelola melalui revisi faktur." }, 400);
+
+  await pool.execute("DELETE FROM attachments WHERE id=?", [id]);
+  await unlink(attachment.storage_path).catch(() => undefined);
+  await writeAudit({
+    userId: c.get("user").id,
+    action: "DELETE",
+    entityType: "ATTACHMENT",
+    entityId: id,
+    oldValues: { filename: attachment.original_filename, category: attachment.category, purchase_document_id: attachment.purchase_document_id }
+  });
+  return c.body(null, 204);
 });
 
 export default router;

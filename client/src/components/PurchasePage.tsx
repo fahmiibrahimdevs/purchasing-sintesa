@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, BadgeCheck, Ban, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, CircleAlert, Download, Eye, FileUp, FolderKanban, LoaderCircle, Pencil, Plus, ReceiptText, RotateCcw, Search, ShoppingBag, Table2, Rows3, Trash2 } from "lucide-react";
+import { ArrowLeft, BadgeCheck, Ban, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, CircleAlert, Download, Eye, FileUp, FolderKanban, LoaderCircle, Pencil, Plus, ReceiptText, RotateCcw, Search, ShoppingBag, Table2, Rows3, Trash2, X } from "lucide-react";
 import { api, dateText, dateTimeText, downloadFile, jsonBody, money, quantityText } from "../lib/api";
 import { useDebouncedValue } from "../lib/hooks";
 import { InvoiceAttachment, PageResult, Project, PurchaseDocument, PurchaseItem, Supplier, User } from "../types";
+import { confirmAction } from "../lib/swal";
 import { Button, EmptyState, ErrorBanner, Field, inputClass as sharedInputClass, LoadingState, Modal, SectionHeading, StatusBadge, SummaryCards } from "./common";
 import { SearchableSelect } from "./SearchableSelect";
 
@@ -16,7 +17,7 @@ type Props = {
 };
 const inputClass = sharedInputClass.replace("rounded-xl", "rounded-lg");
 type PurchaseEditorRoute = { mode: "new" } | { mode: "edit"; id: string } | null;
-type AttachmentPreview = Pick<InvoiceAttachment, "id" | "original_filename" | "mime_type"> & Partial<Pick<InvoiceAttachment, "nsfp" | "invoice_date">> & { uploaded_at?: string };
+type AttachmentPreview = Pick<InvoiceAttachment, "id" | "original_filename" | "mime_type"> & Partial<Pick<InvoiceAttachment, "nsfp" | "invoice_date">> & { uploaded_at?: string; category?: string };
 type PurchaseSourceAttachment = AttachmentPreview & { category: string; file_size: number; uploaded_at: string };
 type ProjectPurchaseSummary = { project_id: string; project_name: string; document_count: number; item_count: number; purchase_total: number };
 type PurchaseSummary = {
@@ -354,10 +355,10 @@ export function PurchasePage({ user, notify, navHighlight, onClearNavHighlight }
     <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-card">
       {isLoading ? <LoadingState label="Mengambil daftar pembelian…" /> : !data?.data.length ? <div className="p-5"><EmptyState title="Belum ada dokumen pembelian" description="Tambahkan transaksi pertama untuk mulai mencatat barang dan kebutuhan faktur." /></div> : view === "grouped" ? <div className="overflow-x-auto"><table className="w-full min-w-[1000px] whitespace-nowrap text-left text-sm">
         <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-600"><tr><th className="w-10 px-4 py-2.5"></th><th className="px-4 py-2.5">Kode kelompok / tanggal</th><th className="px-4 py-2.5">Supplier</th><th className="px-4 py-2.5">No. nota pembelian</th><th className="px-4 py-2.5 text-center">Jumlah barang</th><th className="px-4 py-2.5 text-right">Total</th><th className="px-4 py-2.5">Faktur terunggah</th><th className="px-4 py-2.5">Aksi</th></tr></thead>
-        <tbody className="divide-y divide-slate-100">{data.data.map((doc) => <PurchaseGroupRow key={doc.id} doc={doc} expanded={openIds.has(doc.id)} toggle={() => toggle(doc.id)} user={user} onEdit={() => openEditor({ mode: "edit", id: doc.id })} onUpload={async (file) => { const form = new FormData(); form.append("file", file); form.append("owner_type", "PURCHASE"); form.append("owner_id", doc.id); try { await api("/api/attachments", { method: "POST", body: form }); queryClient.invalidateQueries({ queryKey: ["purchase-files", doc.id] }); notify("Dokumen sumber berhasil diunggah.", "success"); } catch (e: any) { notify(e.message, "error"); } }} />)}</tbody>
+        <tbody className="divide-y divide-slate-100">{data.data.map((doc) => <PurchaseGroupRow key={doc.id} doc={doc} expanded={openIds.has(doc.id)} toggle={() => toggle(doc.id)} user={user} onEdit={() => openEditor({ mode: "edit", id: doc.id })} notify={notify} onUpload={async (file, category = "PURCHASE_SOURCE") => { const form = new FormData(); form.append("file", file); form.append("owner_type", "PURCHASE"); form.append("owner_id", doc.id); form.append("category", category); try { await api("/api/attachments", { method: "POST", body: form }); queryClient.invalidateQueries({ queryKey: ["purchase-files", doc.id] }); notify(category === "PAYMENT_PROOF" ? "Bukti transfer berhasil diunggah." : "Nota pembelian berhasil diunggah.", "success"); } catch (e: any) { notify(e.message, "error"); } }} />)}</tbody>
       </table></div> : <div className="overflow-x-auto"><table className="w-full min-w-[1350px] whitespace-nowrap text-left text-sm">
       <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-600"><tr><th className="px-4 py-2.5">Tanggal</th><th className="px-4 py-2.5">Supplier</th><th className="px-4 py-2.5">Project</th><th className="px-4 py-2.5">Nama barang</th><th className="px-4 py-2.5 text-right">Qty</th><th className="px-4 py-2.5">UOM</th><th className="px-4 py-2.5 text-right">Sub Total</th><th className="px-4 py-2.5 text-right">PPN</th><th className="px-4 py-2.5 text-right">Total</th><th className="px-4 py-2.5">Tanggal faktur</th><th className="px-4 py-2.5">Faktur</th><th className="px-4 py-2.5">Aksi</th></tr></thead>
-        <tbody className="divide-y divide-slate-100">{flatRows.map(({ document, ...item }) => <PurchaseItemRow key={item.id} document={document} item={item} user={user} onEdit={() => openEditor({ mode: "edit", id: document.id })} />)}</tbody>
+        <tbody className="divide-y divide-slate-100">{flatRows.map(({ document, ...item }) => <PurchaseItemRow key={item.id} document={document} item={item} user={user} notify={notify} onEdit={() => openEditor({ mode: "edit", id: document.id })} />)}</tbody>
       </table></div>}
     </section>
     <footer aria-label="Pagination pembelian" className="mt-3 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-card sm:flex-row sm:items-center sm:justify-between">
@@ -381,19 +382,32 @@ export function PurchasePage({ user, notify, navHighlight, onClearNavHighlight }
   </div>;
 }
 
-function PurchaseItemRow({ document, item, user, onEdit }: { document: PurchaseDocument; item: PurchaseItem; user: User; onEdit: () => void }) {
+function PurchaseItemRow({ document, item, user, onEdit, notify }: { document: PurchaseDocument; item: PurchaseItem; user: User; onEdit: () => void; notify: (message: string, kind?: "success" | "error") => void }) {
+  const queryClient = useQueryClient();
   const [preview, setPreview] = useState<{ title: string; files: AttachmentPreview[]; selectedId: string } | null>(null);
   const canPreviewInvoices = user.role === "TAX_STAFF" || user.role === "ADMIN";
-  const { data: noteFiles = [] } = useQuery({
+  const { data: purchaseFiles = [] } = useQuery({
     queryKey: ["purchase-files", document.id],
     queryFn: () => api<PurchaseSourceAttachment[]>(`/api/attachments/purchase/${document.id}`),
   });
+  const noteFiles = purchaseFiles.filter((f) => f.category === "PURCHASE_SOURCE" || (!f.category || f.category !== "PAYMENT_PROOF"));
+  const transferFiles = purchaseFiles.filter((f) => f.category === "PAYMENT_PROOF");
   const invoiceFiles = item.invoice_attachments || [];
   const latestInvoice = invoiceFiles[0];
   const openPreview = (title: string, files: AttachmentPreview[]) => {
     if (files.length) setPreview({ title, files, selectedId: files[0].id });
   };
   const selectedFile = preview?.files.find((file) => file.id === preview.selectedId);
+
+  async function handleDeleteFile(file: AttachmentPreview) {
+    if (!(await confirmAction({ title: `Hapus ${file.original_filename}?`, text: "File akan dihapus permanen dari sistem.", confirmButtonText: "Ya, Hapus", danger: true }))) return;
+    try {
+      await api(`/api/attachments/${file.id}`, { method: "DELETE" });
+      await queryClient.invalidateQueries({ queryKey: ["purchase-files", document.id] });
+      notify("File berhasil dihapus.", "success");
+      setPreview(null);
+    } catch (e: any) { notify(e.message, "error"); }
+  }
 
   return <>
     <tr id={`row-item-${item.id}`} className="hover:bg-slate-50/70">
@@ -411,27 +425,51 @@ function PurchaseItemRow({ document, item, user, onEdit }: { document: PurchaseD
       <td className="px-4 py-2"><div className="flex items-center gap-2">
         {(user.role === "PURCHASING" || user.role === "ADMIN") && <Button type="button" variant="secondary" className="px-2.5 py-1.5 text-xs" title={`Edit pembelian ${document.purchase_group_code}`} onClick={onEdit}><Pencil size={13} />Edit</Button>}
         <Button type="button" variant="secondary" className="px-2.5 py-1.5 text-xs" disabled={!noteFiles.length} title={noteFiles.length ? "Buka nota pembelian" : "Nota pembelian belum diunggah"} onClick={() => openPreview("Nota pembelian", noteFiles)}><Eye size={13} />Nota</Button>
+        <Button type="button" variant="secondary" className="px-2.5 py-1.5 text-xs" disabled={!transferFiles.length} title={transferFiles.length ? "Buka bukti transfer" : "Bukti transfer belum diunggah"} onClick={() => openPreview("Bukti transfer", transferFiles)}><Eye size={13} />Transfer</Button>
         <Button type="button" variant="secondary" className="px-2.5 py-1.5 text-xs" disabled={item.invoice_requirement === "NOT_REQUIRED" || !invoiceFiles.length || !canPreviewInvoices} title={item.invoice_requirement === "NOT_REQUIRED" ? "Barang ini ditandai non faktur" : !invoiceFiles.length ? "File faktur belum tersedia" : canPreviewInvoices ? "Buka file faktur" : "Pratinjau faktur hanya tersedia untuk Staff Pajak dan Admin"} onClick={() => openPreview("Faktur pajak", invoiceFiles)}><Eye size={13} />Faktur{invoiceFiles.length > 1 ? ` (${invoiceFiles.length})` : ""}</Button>
       </div></td>
     </tr>
-    {preview && selectedFile && <Modal title={preview.title} subtitle={selectedFile.nsfp ? `${selectedFile.nsfp} · ${dateText(selectedFile.invoice_date)}` : selectedFile.uploaded_at ? `Diunggah ${dateTimeText(selectedFile.uploaded_at)}` : undefined} onClose={() => setPreview(null)} size="max-w-5xl">
-      {preview.files.length > 1 && <div className="mb-4 flex flex-wrap gap-2">{preview.files.map((file, index) => <button key={file.id} type="button" onClick={() => setPreview((current) => current ? { ...current, selectedId: file.id } : current)} className={`rounded-lg border px-3 py-2 text-left text-xs transition ${file.id === selectedFile.id ? "border-blue-300 bg-blue-50 text-blue-800" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}><span className="block font-semibold">{file.nsfp || `Nota ${index + 1}`}</span>{file.invoice_date ? <span className="mt-0.5 block">{dateText(file.invoice_date)}</span> : file.uploaded_at ? <span className="mt-0.5 block">{dateTimeText(file.uploaded_at)}</span> : null}</button>)}</div>}
+    {preview && selectedFile && <Modal title={preview.title} subtitle={selectedFile.nsfp ? `${selectedFile.nsfp} · ${dateText(selectedFile.invoice_date)}` : selectedFile.uploaded_at ? `Diunggah ${dateTimeText(selectedFile.uploaded_at)} · ${selectedFile.original_filename}` : selectedFile.original_filename} onClose={() => setPreview(null)} size="max-w-5xl">
       <div className="h-[65vh] min-h-[300px] overflow-hidden rounded-xl border border-slate-200 bg-slate-100">{selectedFile.mime_type === "application/pdf" ? <iframe title={`Preview ${preview.title.toLowerCase()}`} src={`/api/attachments/${selectedFile.id}/preview`} className="h-full w-full border-0" /> : <img src={`/api/attachments/${selectedFile.id}/preview`} alt={`Preview ${preview.title.toLowerCase()}`} className="h-full w-full object-contain" />}</div>
-      <div className="mt-3 flex justify-end"><Button type="button" variant="secondary" onClick={() => downloadFile(`/api/attachments/${selectedFile.id}/download`, selectedFile.original_filename)}><Download size={14} />Unduh file</Button></div>
+      <div className="mt-3 flex items-center justify-between">
+        <div>
+          {(user.role === "PURCHASING" || user.role === "ADMIN") && !selectedFile.nsfp && (
+            <Button type="button" variant="dangerGhost" className="px-2.5 py-1.5 text-xs text-rose-600 hover:bg-rose-50" onClick={() => void handleDeleteFile(selectedFile)}>
+              <Trash2 size={13} />Hapus file
+            </Button>
+          )}
+        </div>
+        <Button type="button" variant="secondary" onClick={() => downloadFile(`/api/attachments/${selectedFile.id}/download`, selectedFile.original_filename)}><Download size={14} />Unduh file</Button>
+      </div>
     </Modal>}
   </>;
 }
 
-function PurchaseGroupRow({ doc, expanded, toggle, user, onUpload, onEdit }: { doc: PurchaseDocument; expanded: boolean; toggle: () => void; user: User; onUpload: (file: File) => Promise<void>; onEdit: () => void }) {
-  const [uploading, setUploading] = useState(false);
+function PurchaseGroupRow({ doc, expanded, toggle, user, onUpload, onEdit, notify }: { doc: PurchaseDocument; expanded: boolean; toggle: () => void; user: User; onUpload: (file: File, category: "PURCHASE_SOURCE" | "PAYMENT_PROOF") => Promise<void>; onEdit: () => void; notify: (message: string, kind?: "success" | "error") => void }) {
+  const queryClient = useQueryClient();
+  const [uploadingNote, setUploadingNote] = useState(false);
+  const [uploadingTransfer, setUploadingTransfer] = useState(false);
   const [previewAttachment, setPreviewAttachment] = useState<AttachmentPreview | null>(null);
   const canPreviewInvoices = user.role === "TAX_STAFF" || user.role === "ADMIN";
   const canUploadPurchaseNote = user.role === "PURCHASING" || user.role === "ADMIN";
-  const { data: files = [] } = useQuery({ queryKey: ["purchase-files", doc.id], queryFn: () => api<PurchaseSourceAttachment[]>(`/api/attachments/purchase/${doc.id}`), enabled: expanded });
+  const { data: files = [] } = useQuery({ queryKey: ["purchase-files", doc.id], queryFn: () => api<PurchaseSourceAttachment[]>(`/api/attachments/purchase/${doc.id}`) });
+  const noteFiles = files.filter((f) => f.category === "PURCHASE_SOURCE" || (!f.category || f.category !== "PAYMENT_PROOF"));
+  const transferFiles = files.filter((f) => f.category === "PAYMENT_PROOF");
   const invoiceRequiredItems = doc.items.filter((item) => item.invoice_requirement !== "NOT_REQUIRED");
   const uploadedInvoiceItems = invoiceRequiredItems.filter((item) => Boolean(item.has_uploaded_invoice)).length;
   const invoiceProgress = invoiceRequiredItems.length ? uploadedInvoiceItems / invoiceRequiredItems.length : 0;
   const allInvoicesUploaded = invoiceRequiredItems.length > 0 && uploadedInvoiceItems === invoiceRequiredItems.length;
+
+  async function handleDeleteAttachment(file: AttachmentPreview) {
+    if (!(await confirmAction({ title: `Hapus ${file.original_filename}?`, text: "File akan dihapus permanen.", confirmButtonText: "Ya, Hapus", danger: true }))) return;
+    try {
+      await api(`/api/attachments/${file.id}`, { method: "DELETE" });
+      await queryClient.invalidateQueries({ queryKey: ["purchase-files", doc.id] });
+      notify("File berhasil dihapus.", "success");
+      if (previewAttachment?.id === file.id) setPreviewAttachment(null);
+    } catch (e: any) { notify(e.message, "error"); }
+  }
+
   return <>
     <tr id={`row-doc-${doc.id}`} tabIndex={0} aria-expanded={expanded} onClick={toggle} onKeyDown={(event) => { if (event.target !== event.currentTarget) return; if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggle(); } }} className={`cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 ${expanded ? "bg-slate-50/80" : "hover:bg-slate-50/70"}`}>
       <td className="px-4 py-2"><button onClick={(event) => { event.stopPropagation(); toggle(); }} aria-label={expanded ? "Ciutkan" : "Buka detail"} aria-expanded={expanded} className={`rounded-lg border p-1.5 transition ${expanded ? "border-slate-300 bg-white text-slate-700 shadow-sm" : "border-transparent text-slate-500 hover:border-slate-200 hover:bg-slate-50 hover:text-slate-800"}`}>{expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</button></td>
@@ -439,13 +477,96 @@ function PurchaseGroupRow({ doc, expanded, toggle, user, onUpload, onEdit }: { d
       <td className="px-4 py-2 font-medium text-slate-800">{doc.supplier_name}</td><td className="px-4 py-2 text-slate-700">{doc.supplier_document_no || "—"}</td>
       <td className="px-4 py-2 text-center tabular-nums">{doc.item_count} barang</td><td className="px-4 py-2 text-right font-medium tabular-nums">{money(doc.total_amount)}</td>
       <td className="min-w-[160px] px-4 py-2">{invoiceRequiredItems.length ? <div className="min-w-[132px]" title={`${uploadedInvoiceItems} dari ${invoiceRequiredItems.length} barang yang memerlukan faktur sudah memiliki PDF faktur`}><span className={`text-xs font-semibold tabular-nums ${allInvoicesUploaded ? "text-emerald-700" : uploadedInvoiceItems ? "text-blue-700" : "text-amber-700"}`}>{uploadedInvoiceItems} dari {invoiceRequiredItems.length} barang</span><div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-slate-100"><div className={`h-full rounded-full transition-[width] ${allInvoicesUploaded ? "bg-emerald-500" : "bg-blue-500"}`} style={{ width: `${invoiceProgress * 100}%` }} /></div></div> : <span className="text-slate-400">—</span>}</td>
-      <td className="px-4 py-2" onClick={(event) => event.stopPropagation()}>{(user.role === "PURCHASING" || user.role === "ADMIN") && <Button variant="secondary" className="px-2.5 py-1 text-xs" onClick={onEdit}><Pencil size={13} />Edit</Button>}</td>
+      <td className="px-4 py-2" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-center gap-2">
+          {(user.role === "PURCHASING" || user.role === "ADMIN") && <Button variant="secondary" className="px-2.5 py-1 text-xs" onClick={onEdit}><Pencil size={13} />Edit</Button>}
+          <Button type="button" variant="secondary" className="px-2.5 py-1 text-xs" disabled={!noteFiles.length} title={noteFiles.length ? "Buka nota pembelian" : "Nota pembelian belum diunggah"} onClick={() => { if (noteFiles.length) setPreviewAttachment(noteFiles[0]); }}><Eye size={13} />Nota</Button>
+          <Button type="button" variant="secondary" className="px-2.5 py-1 text-xs" disabled={!transferFiles.length} title={transferFiles.length ? "Buka bukti transfer" : "Bukti transfer belum diunggah"} onClick={() => { if (transferFiles.length) setPreviewAttachment(transferFiles[0]); }}><Eye size={13} />Transfer</Button>
+        </div>
+      </td>
     </tr>
     {expanded && <tr className="bg-slate-50/60"><td colSpan={8} className="px-4 pb-4 pt-2"><div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3 px-1"><div className="text-xs font-semibold text-slate-700">Barang dalam pembelian #{doc.purchase_group_code}</div><div className="flex flex-wrap items-center justify-end gap-2">{files.map((file, index) => <div key={file.id} className="flex max-w-full flex-wrap items-center gap-1 rounded-xl border border-slate-200 bg-white p-1"><span title={file.original_filename} className="max-w-40 truncate px-2 text-xs text-slate-600">{file.original_filename}</span><Button variant="secondary" className="px-2.5 py-1 text-xs" title={`Preview ${file.original_filename}`} onClick={() => setPreviewAttachment(file)}><Eye size={13} />{files.length > 1 ? `Preview ${index + 1}` : "Preview nota"}</Button><Button variant="secondary" className="px-2.5 py-1 text-xs" title={`Unduh ${file.original_filename}`} onClick={() => downloadFile(`/api/attachments/${file.id}/download`, file.original_filename)}><Download size={13} />{files.length > 1 ? `Unduh ${index + 1}` : "Unduh nota"}</Button></div>)}{canUploadPurchaseNote && <label className={`inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition ${uploading ? "pointer-events-none opacity-60" : "cursor-pointer hover:bg-slate-100"}`}>{uploading ? <LoaderCircle size={14} className="animate-spin motion-reduce:animate-none" /> : <FileUp size={14} />}{uploading ? "Mengunggah…" : "Unggah nota"}<input type="file" accept=".pdf,.jpg,.jpeg,.png" disabled={uploading} className="hidden" onChange={async (e) => { const file = e.target.files?.[0]; if (file) { setUploading(true); try { await onUpload(file); } finally { setUploading(false); } } e.currentTarget.value = ""; }} /></label>}</div></div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3 px-1">
+        <div className="text-xs font-semibold text-slate-700">Lampiran & Barang dalam pembelian #{doc.purchase_group_code}</div>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Slot Nota */}
+          {noteFiles.length > 0 ? (
+            <div className="flex items-center gap-1 rounded-xl border border-blue-200 bg-white p-1">
+              <span className="rounded-md bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700">Nota</span>
+              <span title={noteFiles[0].original_filename} className="max-w-36 truncate px-1 text-xs text-slate-600">{noteFiles[0].original_filename}</span>
+              <Button variant="secondary" className="px-2 py-1 text-xs" title={`Preview ${noteFiles[0].original_filename}`} onClick={() => setPreviewAttachment(noteFiles[0])}><Eye size={13} />Preview</Button>
+              <Button variant="secondary" className="px-2 py-1 text-xs" title={`Unduh ${noteFiles[0].original_filename}`} onClick={() => downloadFile(`/api/attachments/${noteFiles[0].id}/download`, noteFiles[0].original_filename)}><Download size={13} />Unduh</Button>
+              {canUploadPurchaseNote && <>
+                <label className="cursor-pointer rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-50" title="Ganti/replace file nota">
+                  Ganti
+                  <input type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (file) { setUploadingNote(true); try { await onUpload(file, "PURCHASE_SOURCE"); } finally { setUploadingNote(false); } }
+                    e.currentTarget.value = "";
+                  }} />
+                </label>
+                <Button variant="dangerGhost" className="px-1.5 py-1 text-xs text-rose-600 hover:bg-rose-50" title="Hapus nota" onClick={() => void handleDeleteAttachment(noteFiles[0])}><Trash2 size={13} /></Button>
+              </>}
+            </div>
+          ) : canUploadPurchaseNote ? (
+            <label className={`inline-flex items-center gap-1.5 rounded-xl border border-dashed border-blue-300 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 transition ${uploadingNote ? "pointer-events-none opacity-60" : "cursor-pointer hover:bg-blue-50"}`}>
+              {uploadingNote ? <LoaderCircle size={14} className="animate-spin motion-reduce:animate-none" /> : <FileUp size={14} />}
+              {uploadingNote ? "Mengunggah…" : "Unggah nota"}
+              <input type="file" accept=".pdf,.jpg,.jpeg,.png" disabled={uploadingNote} className="hidden" onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (file) { setUploadingNote(true); try { await onUpload(file, "PURCHASE_SOURCE"); } finally { setUploadingNote(false); } }
+                e.currentTarget.value = "";
+              }} />
+            </label>
+          ) : null}
+
+          {/* Slot Transfer */}
+          {transferFiles.length > 0 ? (
+            <div className="flex items-center gap-1 rounded-xl border border-emerald-200 bg-white p-1">
+              <span className="rounded-md bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">Transfer</span>
+              <span title={transferFiles[0].original_filename} className="max-w-36 truncate px-1 text-xs text-slate-600">{transferFiles[0].original_filename}</span>
+              <Button variant="secondary" className="px-2 py-1 text-xs" title={`Preview ${transferFiles[0].original_filename}`} onClick={() => setPreviewAttachment(transferFiles[0])}><Eye size={13} />Preview</Button>
+              <Button variant="secondary" className="px-2 py-1 text-xs" title={`Unduh ${transferFiles[0].original_filename}`} onClick={() => downloadFile(`/api/attachments/${transferFiles[0].id}/download`, transferFiles[0].original_filename)}><Download size={13} />Unduh</Button>
+              {canUploadPurchaseNote && <>
+                <label className="cursor-pointer rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-50" title="Ganti/replace bukti transfer">
+                  Ganti
+                  <input type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (file) { setUploadingTransfer(true); try { await onUpload(file, "PAYMENT_PROOF"); } finally { setUploadingTransfer(false); } }
+                    e.currentTarget.value = "";
+                  }} />
+                </label>
+                <Button variant="dangerGhost" className="px-1.5 py-1 text-xs text-rose-600 hover:bg-rose-50" title="Hapus bukti transfer" onClick={() => void handleDeleteAttachment(transferFiles[0])}><Trash2 size={13} /></Button>
+              </>}
+            </div>
+          ) : canUploadPurchaseNote ? (
+            <label className={`inline-flex items-center gap-1.5 rounded-xl border border-dashed border-emerald-300 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-700 transition ${uploadingTransfer ? "pointer-events-none opacity-60" : "cursor-pointer hover:bg-emerald-50"}`}>
+              {uploadingTransfer ? <LoaderCircle size={14} className="animate-spin motion-reduce:animate-none" /> : <FileUp size={14} />}
+              {uploadingTransfer ? "Mengunggah…" : "Unggah transfer"}
+              <input type="file" accept=".pdf,.jpg,.jpeg,.png" disabled={uploadingTransfer} className="hidden" onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (file) { setUploadingTransfer(true); try { await onUpload(file, "PAYMENT_PROOF"); } finally { setUploadingTransfer(false); } }
+                e.currentTarget.value = "";
+              }} />
+            </label>
+          ) : null}
+        </div>
+      </div>
       <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white"><table className="w-full min-w-[1180px] whitespace-nowrap text-left text-xs"><thead className="bg-slate-100 uppercase tracking-wide text-slate-600"><tr><th className="px-3 py-2.5">Kode item</th><th className="px-3 py-2.5">Project</th><th className="px-3 py-2.5">Nama barang</th><th className="px-3 py-2.5 text-right">Qty</th><th className="px-3 py-2.5">UOM</th><th className="px-3 py-2.5 text-right">Sub Total</th><th className="px-3 py-2.5 text-right">PPN</th><th className="px-3 py-2.5 text-right">Total</th><th className="px-3 py-2.5">Faktur</th><th className="px-3 py-2.5">Tanggal faktur</th><th className="px-3 py-2.5">Preview faktur</th></tr></thead><tbody className="divide-y divide-slate-100">{doc.items.map((item) => { const attachments = item.invoice_attachments || []; const latestInvoice = attachments[0]; const emptyLabel = item.invoice_requirement === "NOT_REQUIRED" ? "Non faktur" : !canPreviewInvoices && item.has_uploaded_invoice ? "Akses terbatas" : "Belum diunggah"; return <tr key={item.id} id={`row-item-${item.id}`} className="odd:bg-white even:bg-slate-50/60 hover:bg-slate-100/70"><td className="px-3 py-2.5 font-medium text-blue-700">{item.item_code}</td><td className="px-3 py-2.5 text-slate-700">{item.project_name || "Tanpa project"}</td><td className="px-3 py-2.5 font-medium text-slate-900">{item.item_name}</td><td className="px-3 py-2.5 text-right tabular-nums text-slate-800">{quantityText(item.quantity)}</td><td className="px-3 py-2.5 text-slate-800">{item.uom}</td><td className="px-3 py-2.5 text-right tabular-nums font-medium text-slate-900">{money(item.purchase_subtotal)}</td><td className="px-3 py-2.5 text-right tabular-nums">{money(item.purchase_tax_amount)}</td><td className="px-3 py-2.5 text-right tabular-nums font-medium text-slate-900">{money(item.purchase_total ?? Number(item.purchase_subtotal) + Number(item.purchase_tax_amount || 0))}</td><td className="px-3 py-2.5"><StatusBadge value={item.invoice_requirement} /></td><td className="px-3 py-2.5 text-slate-600">{latestInvoice ? dateText(latestInvoice.invoice_date) : !canPreviewInvoices && item.has_uploaded_invoice ? "Akses terbatas" : "—"}</td><td className="px-3 py-2.5">{canPreviewInvoices && attachments.length ? <div className="flex flex-wrap gap-1.5">{attachments.map((attachment, index) => <button key={attachment.id} type="button" aria-label={`Preview faktur ${attachment.nsfp}`} title={`${attachment.nsfp} · ${attachment.original_filename}`} onClick={() => setPreviewAttachment(attachment)} className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-white px-2.5 py-1.5 font-medium text-blue-700 transition hover:border-blue-300 hover:bg-blue-50"><Eye size={13} />{attachments.length > 1 ? `Preview ${index + 1}` : "Preview"}</button>)}</div> : <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs italic text-slate-500">{emptyLabel}</span>}</td></tr>; })}</tbody></table></div>
     </div></td></tr>}
-    {previewAttachment && createPortal(<Modal title={previewAttachment.original_filename} subtitle={previewAttachment.nsfp ? `Faktur ${previewAttachment.nsfp} · ${dateText(previewAttachment.invoice_date)}` : "Nota pembelian"} onClose={() => setPreviewAttachment(null)} size="max-w-5xl"><div className="h-[65vh] min-h-[300px] overflow-hidden rounded-xl border border-slate-200 bg-slate-100">{previewAttachment.mime_type === "application/pdf" ? <iframe title={`Preview ${previewAttachment.nsfp ? `faktur ${previewAttachment.nsfp}` : "nota pembelian"}`} src={`/api/attachments/${previewAttachment.id}/preview`} className="h-full w-full border-0" /> : <img src={`/api/attachments/${previewAttachment.id}/preview`} alt={`Preview ${previewAttachment.nsfp ? `faktur ${previewAttachment.nsfp}` : "nota pembelian"}`} className="h-full w-full object-contain" />}</div><div className="mt-3 flex justify-end"><Button variant="secondary" onClick={() => downloadFile(`/api/attachments/${previewAttachment.id}/download`, previewAttachment.original_filename)}><Download size={14} />Unduh file</Button></div></Modal>, document.body)}
+    {previewAttachment && createPortal(<Modal title={previewAttachment.category === "PAYMENT_PROOF" ? "Bukti transfer" : previewAttachment.nsfp ? `Faktur ${previewAttachment.nsfp}` : "Nota pembelian"} subtitle={previewAttachment.nsfp ? `${previewAttachment.nsfp} · ${dateText(previewAttachment.invoice_date)}` : previewAttachment.uploaded_at ? `Diunggah ${dateTimeText(previewAttachment.uploaded_at)} · ${previewAttachment.original_filename}` : previewAttachment.original_filename} onClose={() => setPreviewAttachment(null)} size="max-w-5xl">
+      <div className="h-[65vh] min-h-[300px] overflow-hidden rounded-xl border border-slate-200 bg-slate-100">{previewAttachment.mime_type === "application/pdf" ? <iframe title={`Preview ${previewAttachment.nsfp ? `faktur ${previewAttachment.nsfp}` : "lampiran"}`} src={`/api/attachments/${previewAttachment.id}/preview`} className="h-full w-full border-0" /> : <img src={`/api/attachments/${previewAttachment.id}/preview`} alt={`Preview ${previewAttachment.nsfp ? `faktur ${previewAttachment.nsfp}` : "lampiran"}`} className="h-full w-full object-contain" />}</div>
+      <div className="mt-3 flex items-center justify-between">
+        <div>
+          {canUploadPurchaseNote && !previewAttachment.nsfp && (
+            <Button type="button" variant="dangerGhost" className="px-2.5 py-1.5 text-xs text-rose-600 hover:bg-rose-50" onClick={() => void handleDeleteAttachment(previewAttachment)}>
+              <Trash2 size={13} />Hapus file
+            </Button>
+          )}
+        </div>
+        <Button variant="secondary" onClick={() => downloadFile(`/api/attachments/${previewAttachment.id}/download`, previewAttachment.original_filename)}><Download size={14} />Unduh file</Button>
+      </div>
+    </Modal>, document.body)}
   </>;
 }
 
@@ -467,7 +588,24 @@ function PurchaseEditorPage({ suppliers, document, onClose, onSaved, notify }: {
   })) || [newItem()]);
   const supplierDefaultInvoiceRequirement = suppliers.find((supplier) => supplier.id === supplierId)?.default_invoice_requirement === "NOT_REQUIRED" ? "NOT_REQUIRED" : "REQUIRED";
   const [sourceFile, setSourceFile] = useState<File | null>(null);
+  const [transferFile, setTransferFile] = useState<File | null>(null);
+  const { data: existingFiles = [] } = useQuery({
+    queryKey: ["purchase-files", document?.id],
+    queryFn: () => api<PurchaseSourceAttachment[]>(`/api/attachments/purchase/${document?.id}`),
+    enabled: Boolean(document?.id),
+  });
+  const existingNotes = existingFiles.filter((f) => f.category === "PURCHASE_SOURCE" || (!f.category || f.category !== "PAYMENT_PROOF"));
+  const existingTransfers = existingFiles.filter((f) => f.category === "PAYMENT_PROOF");
   const [error, setError] = useState("");
+
+  async function deleteExistingFile(file: AttachmentPreview) {
+    if (!(await confirmAction({ title: `Hapus ${file.original_filename}?`, text: "File akan dihapus permanen.", confirmButtonText: "Ya, Hapus", danger: true }))) return;
+    try {
+      await api(`/api/attachments/${file.id}`, { method: "DELETE" });
+      await queryClient.invalidateQueries({ queryKey: ["purchase-files", document?.id] });
+      notify("File berhasil dihapus.", "success");
+    } catch (e: any) { notify(e.message, "error"); }
+  }
   const [saving, setSaving] = useState(false);
   const subtotal = roundMoney(items.reduce((sum, item) => sum + itemAmounts(item, priceTaxMode).subtotal, 0));
   const taxSum = roundMoney(items.reduce((sum, item) => sum + itemAmounts(item, priceTaxMode).tax, 0));
@@ -508,7 +646,11 @@ function PurchaseEditorPage({ suppliers, document, onClose, onSaved, notify }: {
         ? await api<{ id: string }>(`/api/purchase-documents/${document.id}`, { method: "PUT", body: jsonBody(payload) })
         : await api<{ id: string }>("/api/purchase-documents", { method: "POST", body: jsonBody(payload) });
       if (sourceFile) {
-        const form = new FormData(); form.append("file", sourceFile); form.append("owner_type", "PURCHASE"); form.append("owner_id", result.id);
+        const form = new FormData(); form.append("file", sourceFile); form.append("owner_type", "PURCHASE"); form.append("owner_id", result.id); form.append("category", "PURCHASE_SOURCE");
+        await api("/api/attachments", { method: "POST", body: form });
+      }
+      if (transferFile) {
+        const form = new FormData(); form.append("file", transferFile); form.append("owner_type", "PURCHASE"); form.append("owner_id", result.id); form.append("category", "PAYMENT_PROOF");
         await api("/api/attachments", { method: "POST", body: form });
       }
       queryClient.invalidateQueries({ queryKey: ["purchase-files", result.id] });
@@ -527,7 +669,16 @@ function PurchaseEditorPage({ suppliers, document, onClose, onSaved, notify }: {
       <Field label="Supplier" required><SearchableSelect className={inputClass} value={supplierId} placeholder="Pilih supplier" searchPlaceholder="Cari supplier…" options={suppliers.filter((s) => s.is_active).map((s) => ({ value: s.id, label: s.name, sublabel: s.supplier_code }))} onChange={selectSupplier} /></Field>
       <Field label="Tanggal pembelian" required><input type="date" className={inputClass} value={purchaseDate} onChange={(e) => setPurchaseDate(e.target.value)} /></Field>
       <Field label="No. nota pembelian"><input className={inputClass} value={supplierDocumentNo} onChange={(e) => setSupplierDocumentNo(e.target.value)} placeholder="Nomor nota pembelian dari supplier" /></Field>
-      <div className="md:col-span-2 lg:col-span-3"><Field label="Dokumen sumber" hint="PDF, JPG, atau PNG. Maksimal 15 MB."><input type="file" accept=".pdf,.jpg,.jpeg,.png" className={`${inputClass} file:mr-3 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-blue-700`} onChange={(e) => setSourceFile(e.target.files?.[0] || null)} /></Field></div>
+      <div className="md:col-span-2 lg:col-span-3 grid gap-4 sm:grid-cols-2">
+        <div>
+          <Field label={existingNotes.length > 0 ? "Ganti nota pembelian (Opsional)" : "Nota pembelian (Dokumen sumber)"} hint="PDF, JPG, atau PNG. Maksimal 15 MB. Upload baru otomatis menggantikan file lama."><input type="file" accept=".pdf,.jpg,.jpeg,.png" className={`${inputClass} file:mr-3 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-blue-700`} onChange={(e) => setSourceFile(e.target.files?.[0] || null)} /></Field>
+          {existingNotes.length > 0 && <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-slate-500"><span className="font-medium text-slate-700">File nota terunggah:</span>{existingNotes.map((f) => <span key={f.id} className="inline-flex items-center gap-1 rounded bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">{f.original_filename}<button type="button" title="Hapus file nota" onClick={() => void deleteExistingFile(f)} className="text-blue-500 hover:text-rose-600"><X size={12} /></button></span>)}</div>}
+        </div>
+        <div>
+          <Field label={existingTransfers.length > 0 ? "Ganti bukti transfer (Opsional)" : "Bukti transfer (Opsional)"} hint="PDF, JPG, atau PNG. Bukti pembayaran/transfer bank. Upload baru otomatis menggantikan file lama."><input type="file" accept=".pdf,.jpg,.jpeg,.png" className={`${inputClass} file:mr-3 file:rounded-lg file:border-0 file:bg-emerald-50 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-emerald-700`} onChange={(e) => setTransferFile(e.target.files?.[0] || null)} /></Field>
+          {existingTransfers.length > 0 && <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-slate-500"><span className="font-medium text-slate-700">Bukti transfer terunggah:</span>{existingTransfers.map((f) => <span key={f.id} className="inline-flex items-center gap-1 rounded bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">{f.original_filename}<button type="button" title="Hapus bukti transfer" onClick={() => void deleteExistingFile(f)} className="text-emerald-500 hover:text-rose-600"><X size={12} /></button></span>)}</div>}
+        </div>
+      </div>
     </div>
     </section>
     <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-card sm:p-5">
