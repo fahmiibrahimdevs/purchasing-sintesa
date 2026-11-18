@@ -11,8 +11,9 @@ async function main() {
   if (process.env.RESET_DEMO_DATA !== "1") {
     throw new Error("Reset ditolak. Set RESET_DEMO_DATA=1 untuk mengonfirmasi penghapusan data demo lokal.");
   }
-  if (process.env.NODE_ENV === "production" || !["127.0.0.1", "localhost", "::1"].includes(dbHost) || dbName !== "purchasing_tax_invoice") {
-    throw new Error("Reset hanya diizinkan untuk database purchasing_tax_invoice lokal dan non-production.");
+  const allowProd = process.env.ALLOW_PRODUCTION_RESET === "1";
+  if ((process.env.NODE_ENV === "production" && !allowProd) || !["127.0.0.1", "localhost", "::1"].includes(dbHost) || dbName !== "purchasing_tax_invoice") {
+    throw new Error("Reset hanya diizinkan untuk database purchasing_tax_invoice lokal atau dengan ALLOW_PRODUCTION_RESET=1.");
   }
 
   await runMigrations();
