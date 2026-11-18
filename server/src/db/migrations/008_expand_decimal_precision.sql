@@ -1,0 +1,33 @@
+ALTER TABLE purchase_documents
+  MODIFY COLUMN header_subtotal DECIMAL(18,4) NULL,
+  MODIFY COLUMN header_tax_amount DECIMAL(18,4) NULL,
+  MODIFY COLUMN header_total DECIMAL(18,4) NULL;
+
+ALTER TABLE purchase_items
+  MODIFY COLUMN unit_price DECIMAL(18,4) NOT NULL,
+  MODIFY COLUMN unit_price_entered DECIMAL(18,4) NULL,
+  MODIFY COLUMN discount_amount DECIMAL(18,4) NOT NULL DEFAULT 0,
+  MODIFY COLUMN purchase_subtotal DECIMAL(18,4) NOT NULL,
+  MODIFY COLUMN purchase_tax_amount DECIMAL(18,4) NULL,
+  MODIFY COLUMN purchase_total DECIMAL(18,4) NULL,
+  MODIFY COLUMN invoice_target_dpp DECIMAL(18,4) NULL;
+
+ALTER TABLE tax_invoices
+  MODIFY COLUMN dpp_amount DECIMAL(18,4) NOT NULL,
+  MODIFY COLUMN ppn_amount DECIMAL(18,4) NOT NULL,
+  MODIFY COLUMN other_tax_amount DECIMAL(18,4) NOT NULL DEFAULT 0,
+  MODIFY COLUMN invoice_total DECIMAL(18,4) NOT NULL;
+
+ALTER TABLE tax_invoice_lines
+  MODIFY COLUMN unit_price DECIMAL(18,4) NULL,
+  MODIFY COLUMN discount_amount DECIMAL(18,4) NOT NULL DEFAULT 0,
+  MODIFY COLUMN dpp_amount DECIMAL(18,4) NOT NULL,
+  MODIFY COLUMN ppn_amount DECIMAL(18,4) NOT NULL,
+  MODIFY COLUMN other_tax_amount DECIMAL(18,4) NOT NULL DEFAULT 0,
+  MODIFY COLUMN line_total DECIMAL(18,4) NOT NULL;
+
+ALTER TABLE tax_invoice_purchase_allocations
+  MODIFY COLUMN allocated_dpp DECIMAL(18,4) NOT NULL,
+  MODIFY COLUMN allocated_ppn DECIMAL(18,4) NOT NULL DEFAULT 0,
+  MODIFY COLUMN allocated_other_tax DECIMAL(18,4) NOT NULL DEFAULT 0,
+  MODIFY COLUMN allocated_total DECIMAL(18,4) NOT NULL;

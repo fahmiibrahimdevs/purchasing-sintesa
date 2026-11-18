@@ -15,7 +15,7 @@ function money(value: unknown, label: string) {
   return String(value);
 }
 
-const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 10000) / 10000;
 
 function decimal(value: unknown, label: string, nullable = false) {
   if ((value === undefined || value === null || value === "") && nullable) return null;
@@ -238,31 +238,15 @@ router.post("/tax-invoices", roles, async (c) => {
     await withTransaction(async (conn) => {
       const [duplicateRows] = await conn.execute("SELECT id FROM tax_invoices WHERE supplier_id=? AND nsfp=? LIMIT 1", [body.supplier_id, String(body.nsfp).trim()]);
       if ((duplicateRows as any[]).length) throw new Error("NSFP ini sudah tercatat untuk supplier tersebut.");
+      let oldInvoice: any = null;
       if (invoiceKind === "REPLACEMENT") {
         const [oldRows] = await conn.execute("SELECT id, supplier_id, lifecycle_status FROM tax_invoices WHERE id=? FOR UPDATE", [body.replaces_tax_invoice_id]);
-        const old = (oldRows as any[])[0];
-        if (!old || old.supplier_id !== body.supplier_id || ["CANCELLED", "REPLACED"].includes(old.lifecycle_status)) throw new Error("Faktur lama tidak valid untuk diganti.");
+        oldInvoice = (oldRows as any[])[0];
+        if (!oldInvoice || oldInvoice.supplier_id !== body.supplier_id || ["CANCELLED", "REPLACED"].includes(oldInvoice.lifecycle_status)) throw new Error("Faktur lama tidak valid untuk diganti.");
         const [replacementRows] = await conn.execute("SELECT id FROM tax_invoices WHERE replaces_tax_invoice_id=? AND lifecycle_status<>'CANCELLED' LIMIT 1 FOR UPDATE", [body.replaces_tax_invoice_id]);
         if ((replacementRows as any[]).length) throw new Error("Faktur pengganti untuk faktur ini sudah dibuat.");
-
-        await conn.execute("UPDATE tax_invoices SET lifecycle_status='REPLACED' WHERE id=?", [body.replaces_tax_invoice_id]);
-        await recordEvent(conn, {
-          invoiceId: body.replaces_tax_invoice_id,
-          eventType: "REPLACED",
-          actorId: c.get("user").id,
-          oldValues: { lifecycle_status: old.lifecycle_status },
-          newValues: { lifecycle_status: "REPLACED" },
-          relatedInvoiceId: invoiceId,
-        });
-        await writeAudit({
-          userId: c.get("user").id,
-          action: "MARK_REPLACED",
-          entityType: "TAX_INVOICE",
-          entityId: body.replaces_tax_invoice_id,
-          oldValues: { lifecycle_status: old.lifecycle_status },
-          newValues: { lifecycle_status: "REPLACED", replacement_invoice_id: invoiceId },
-        }, conn);
       }
+
       await conn.execute(
         `INSERT INTO tax_invoices (id, supplier_id, nsfp, invoice_date, tax_period_year, tax_period_month,
          dpp_amount, ppn_amount, other_tax_amount, invoice_total, invoice_kind, replaces_tax_invoice_id, lifecycle_status, created_by, notes)
@@ -271,6 +255,26 @@ router.post("/tax-invoices", roles, async (c) => {
           header.dpp_amount, header.ppn_amount, header.other_tax_amount, header.invoice_total, invoiceKind,
           invoiceKind === "REPLACEMENT" ? body.replaces_tax_invoice_id : null, c.get("user").id, body.notes || null]
       );
+
+      if (invoiceKind === "REPLACEMENT" && oldInvoice) {
+        await conn.execute("UPDATE tax_invoices SET lifecycle_status='REPLACED' WHERE id=?", [body.replaces_tax_invoice_id]);
+        await recordEvent(conn, {
+          invoiceId: body.replaces_tax_invoice_id,
+          eventType: "REPLACED",
+          actorId: c.get("user").id,
+          oldValues: { lifecycle_status: oldInvoice.lifecycle_status },
+          newValues: { lifecycle_status: "REPLACED" },
+          relatedInvoiceId: invoiceId,
+        });
+        await writeAudit({
+          userId: c.get("user").id,
+          action: "MARK_REPLACED",
+          entityType: "TAX_INVOICE",
+          entityId: body.replaces_tax_invoice_id,
+          oldValues: { lifecycle_status: oldInvoice.lifecycle_status },
+          newValues: { lifecycle_status: "REPLACED", replacement_invoice_id: invoiceId },
+        }, conn);
+      }
       const requestedByItem = new Map<string, number>();
       const lineTotals = { dpp: 0, ppn: 0, other: 0, total: 0 };
       for (const line of lines) {
@@ -412,15 +416,15 @@ router.put("/tax-invoices/:id", roles, async (c) => {
           const lineId = newId();
           const allocationId = newId();
           const quantity = Number(row.quantity).toFixed(4);
-          const dpp = Number(row.dpp).toFixed(2);
-          const ppn = Number(row.ppn).toFixed(2);
-          const otherTax = Number(row.otherTax).toFixed(2);
-          const total = Number(row.total).toFixed(2);
-          const unitPrice = (Number(row.quantity) > 0 ? roundMoney(Number(row.dpp) / Number(row.quantity)) : 0).toFixed(2);
+          const dpp = Number(row.dpp).toFixed(4);
+          const ppn = Number(row.ppn).toFixed(4);
+          const otherTax = Number(row.otherTax).toFixed(4);
+          const total = Number(row.total).toFixed(4);
+          const unitPrice = (Number(row.quantity) > 0 ? roundMoney(Number(row.dpp) / Number(row.quantity)) : 0).toFixed(4);
           totals.dpp += Number(dpp); totals.ppn += Number(ppn); totals.otherTax += Number(otherTax); totals.total += Number(total);
           await conn.execute(
             `INSERT INTO tax_invoice_lines (id, tax_invoice_id, line_no, description, quantity, uom, unit_price, discount_amount, dpp_amount, ppn_amount, other_tax_amount, line_total)
-             VALUES (?, ?, ?, ?, ?, ?, ?, '0.00', ?, ?, ?, ?)`,
+             VALUES (?, ?, ?, ?, ?, ?, ?, '0.0000', ?, ?, ?, ?)`,
             [lineId, id, index + 1, row.item.item_name, quantity, row.item.uom, unitPrice, dpp, ppn, otherTax, total]
           );
           await conn.execute(
@@ -432,7 +436,7 @@ router.put("/tax-invoices/:id", roles, async (c) => {
 
         await conn.execute(
           "UPDATE tax_invoices SET nsfp=?, invoice_date=?, tax_period_year=?, tax_period_month=?, dpp_amount=?, ppn_amount=?, other_tax_amount=?, invoice_total=? WHERE id=?",
-          [nsfp, invoiceDate, taxPeriodYear, taxPeriodMonth, roundMoney(totals.dpp).toFixed(2), roundMoney(totals.ppn).toFixed(2), roundMoney(totals.otherTax).toFixed(2), roundMoney(totals.total).toFixed(2), id]
+          [nsfp, invoiceDate, taxPeriodYear, taxPeriodMonth, roundMoney(totals.dpp).toFixed(4), roundMoney(totals.ppn).toFixed(4), roundMoney(totals.otherTax).toFixed(4), roundMoney(totals.total).toFixed(4), id]
         );
         await recordEvent(conn, {
           invoiceId: id,
@@ -443,7 +447,7 @@ router.put("/tax-invoices/:id", roles, async (c) => {
         await writeAudit({
           userId: c.get("user").id, action: "UPDATE", entityType: "TAX_INVOICE", entityId: id,
           oldValues: { nsfp: invoice.nsfp, invoice_date: invoice.invoice_date, tax_period_year: invoice.tax_period_year, tax_period_month: invoice.tax_period_month, dpp_amount: invoice.dpp_amount, ppn_amount: invoice.ppn_amount, invoice_total: invoice.invoice_total },
-          newValues: { nsfp, invoice_date: invoiceDate, tax_period_year: taxPeriodYear, tax_period_month: taxPeriodMonth, dpp_amount: roundMoney(totals.dpp).toFixed(2), ppn_amount: roundMoney(totals.ppn).toFixed(2), invoice_total: roundMoney(totals.total).toFixed(2) },
+          newValues: { nsfp, invoice_date: invoiceDate, tax_period_year: taxPeriodYear, tax_period_month: taxPeriodMonth, dpp_amount: roundMoney(totals.dpp).toFixed(4), ppn_amount: roundMoney(totals.ppn).toFixed(4), invoice_total: roundMoney(totals.total).toFixed(4) },
         }, conn);
       } else {
         await conn.execute("UPDATE tax_invoices SET nsfp=?, invoice_date=?, tax_period_year=?, tax_period_month=? WHERE id=?", [nsfp, invoiceDate, taxPeriodYear, taxPeriodMonth, id]);

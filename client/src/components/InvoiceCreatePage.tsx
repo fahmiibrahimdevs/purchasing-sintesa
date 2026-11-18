@@ -149,17 +149,17 @@ export function InvoiceCreatePage({ initialItem, replacementInvoiceId, onBack, n
   const itemQuantity = (item: InvoiceSourceItem) => replacementAllocations.get(item.id)?.quantity ?? Number(item.remaining_quantity ?? item.quantity ?? 0);
   const itemDpp = (item: InvoiceSourceItem) => {
     const replacementValue = replacementAllocations.get(item.id);
-    if (replacementInvoiceId && replacementValue) return Math.round(replacementValue.dpp * 100) / 100;
+    if (replacementInvoiceId && replacementValue) return Math.round(replacementValue.dpp * 10000) / 10000;
     const amount = item.remaining_dpp == null
       ? Number(item.purchase_subtotal || 0) * (Number(item.quantity) ? itemQuantity(item) / Number(item.quantity) : 0)
       : Number(item.remaining_dpp);
-    return Math.round(amount * 100) / 100;
+    return Math.round(amount * 10000) / 10000;
   };
   const itemPpn = (item: InvoiceSourceItem) => {
     const replacementValue = replacementAllocations.get(item.id);
-    if (replacementInvoiceId && replacementValue) return Math.round(replacementValue.ppn * 100) / 100;
+    if (replacementInvoiceId && replacementValue) return Math.round(replacementValue.ppn * 10000) / 10000;
     const originalQuantity = Number(item.quantity || 0);
-    return Math.round((originalQuantity > 0 ? Number(item.purchase_tax_amount || 0) * itemQuantity(item) / originalQuantity : 0) * 100) / 100;
+    return Math.round((originalQuantity > 0 ? Number(item.purchase_tax_amount || 0) * itemQuantity(item) / originalQuantity : 0) * 10000) / 10000;
   };
   const dppValue = selectedItems.reduce((sum, item) => sum + itemDpp(item), 0);
   const ppnValue = selectedItems.reduce((sum, item) => sum + itemPpn(item), 0);
@@ -233,19 +233,19 @@ export function InvoiceCreatePage({ initialItem, replacementInvoiceId, onBack, n
           description: item.item_name,
           quantity: quantity.toFixed(4),
           uom: item.uom,
-          unit_price: (quantity > 0 ? lineDpp / quantity : 0).toFixed(2),
-          discount_amount: "0.00",
-          dpp_amount: lineDpp.toFixed(2),
-          ppn_amount: linePpn.toFixed(2),
-          other_tax_amount: (replacementAllocations.get(item.id)?.other || 0).toFixed(2),
-          line_total: (lineTotal + (replacementAllocations.get(item.id)?.other || 0)).toFixed(2),
+          unit_price: (quantity > 0 ? lineDpp / quantity : 0).toFixed(4),
+          discount_amount: "0.0000",
+          dpp_amount: lineDpp.toFixed(4),
+          ppn_amount: linePpn.toFixed(4),
+          other_tax_amount: (replacementAllocations.get(item.id)?.other || 0).toFixed(4),
+          line_total: (lineTotal + (replacementAllocations.get(item.id)?.other || 0)).toFixed(4),
           allocations: [{
             purchase_item_id: item.id,
             allocated_quantity: quantity.toFixed(4),
-            allocated_dpp: lineDpp.toFixed(2),
-            allocated_ppn: linePpn.toFixed(2),
-            allocated_other_tax: (replacementAllocations.get(item.id)?.other || 0).toFixed(2),
-            allocated_total: (lineTotal + (replacementAllocations.get(item.id)?.other || 0)).toFixed(2),
+            allocated_dpp: lineDpp.toFixed(4),
+            allocated_ppn: linePpn.toFixed(4),
+            allocated_other_tax: (replacementAllocations.get(item.id)?.other || 0).toFixed(4),
+            allocated_total: (lineTotal + (replacementAllocations.get(item.id)?.other || 0)).toFixed(4),
             allocation_note: "Nilai barang mengikuti data nota pembelian.",
           }],
         };
@@ -256,10 +256,10 @@ export function InvoiceCreatePage({ initialItem, replacementInvoiceId, onBack, n
         invoice_date: invoiceDate,
         tax_period_year: Number(taxPeriodYear),
         tax_period_month: Number(taxPeriodMonth),
-        dpp_amount: dppValue.toFixed(2),
-        ppn_amount: ppnValue.toFixed(2),
-        other_tax_amount: otherTaxValue.toFixed(2),
-        invoice_total: invoiceTotal.toFixed(2),
+        dpp_amount: dppValue.toFixed(4),
+        ppn_amount: ppnValue.toFixed(4),
+        other_tax_amount: otherTaxValue.toFixed(4),
+        invoice_total: invoiceTotal.toFixed(4),
         invoice_kind: replacementInvoiceId ? "REPLACEMENT" : "NORMAL",
         ...(replacementInvoiceId ? { replaces_tax_invoice_id: replacementInvoiceId } : {}),
         lines,

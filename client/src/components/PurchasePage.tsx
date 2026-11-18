@@ -54,10 +54,10 @@ const parseRupiahDraft = (value: string) => {
   const comma = sanitized.indexOf(",");
   const integer = (comma < 0 ? sanitized : sanitized.slice(0, comma)).replace(/^0+(?=\d)/, "") || (sanitized ? "0" : "");
   if (comma < 0) return integer;
-  const fraction = sanitized.slice(comma + 1).replace(/\D/g, "").slice(0, 2);
+  const fraction = sanitized.slice(comma + 1).replace(/\D/g, "").slice(0, 4);
   return `${integer || "0"}.${fraction}`;
 };
-const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 10000) / 10000;
 const purchasePpnRate = 0.11;
 function localDateInputValue(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -118,7 +118,8 @@ function RupiahInput({ value, onChange, compact = false, ariaLabel }: { value: s
 }
 
 function RupiahCalculatedInput({ value, ariaLabel }: { value: number; ariaLabel: string }) {
-  const formatted = new Intl.NumberFormat("id-ID", { maximumFractionDigits: 2 }).format(value);
+  const isInt = Number.isInteger(value);
+  const formatted = new Intl.NumberFormat("id-ID", { minimumFractionDigits: isInt ? 0 : 2, maximumFractionDigits: 4 }).format(value);
   return <div className="flex h-[42px] min-w-0 overflow-hidden rounded-lg border border-slate-300 bg-slate-200"><span className="flex shrink-0 items-center border-r border-slate-300 bg-slate-300 px-2 text-xs font-medium text-slate-700">Rp</span><input className="min-w-0 flex-1 px-2 text-right text-xs font-medium tabular-nums text-slate-800 outline-none" style={{ backgroundColor: "#e2e8f0" }} value={formatted} readOnly aria-label={ariaLabel} /></div>;
 }
 

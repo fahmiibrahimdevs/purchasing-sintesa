@@ -35,9 +35,12 @@ function compactRupiah(value: number) {
 }
 
 function RupiahCell({ value }: { value: number }) {
+  const n = Number(value || 0);
+  const isInt = Number.isInteger(n);
+  const formatted = new Intl.NumberFormat("id-ID", { minimumFractionDigits: isInt ? 0 : 2, maximumFractionDigits: 4 }).format(n);
   return <span className="flex w-full items-center justify-between gap-2 tabular-nums">
     <span className="text-slate-500">Rp</span>
-    <span className="text-right">{rupiahNumber.format(Number(value || 0))}</span>
+    <span className="text-right">{formatted}</span>
   </span>;
 }
 

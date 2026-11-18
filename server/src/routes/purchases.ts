@@ -12,7 +12,7 @@ const sourceTypes = new Set(["RECEIPT", "INVOICE", "PROFORMA_INVOICE", "OTHER"])
 const requirements = new Set(["REQUIRED", "NOT_REQUIRED"]);
 const priceTaxModes = new Set(["INCLUSIVE", "EXCLUSIVE"]);
 const purchasePpnRate = 0.11;
-const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 10000) / 10000;
 const decimalValue = (value: unknown, label: string, { nullable = false, positive = false } = {}) => {
   if ((value === null || value === undefined || value === "") && nullable) return null;
   const n = Number(value);
@@ -162,15 +162,15 @@ function normalizeItem(item: any, index: number, priceTaxMode: string) {
   const totalAmount = !isTaxable || priceTaxMode === "INCLUSIVE"
     ? roundMoney(Number(qty) * enteredPrice)
     : roundMoney(subtotalAmount * (1 + purchasePpnRate));
-  const price = netUnitPrice.toFixed(2);
-  const subtotal = subtotalAmount.toFixed(2);
-  const tax = (isTaxable ? roundMoney(totalAmount - subtotalAmount) : 0).toFixed(2);
-  const total = totalAmount.toFixed(2);
+  const price = netUnitPrice.toFixed(4);
+  const subtotal = subtotalAmount.toFixed(4);
+  const tax = (isTaxable ? roundMoney(totalAmount - subtotalAmount) : 0).toFixed(4);
+  const total = totalAmount.toFixed(4);
   return {
     id: newId(), item_code: "", item_sequence: index + 1,
     project_id: item.project_id || null, item_name: String(item.item_name).trim(),
     item_description: item.item_description || null, quantity: qty, uom: String(item.uom).trim(),
-    unit_price: price, unit_price_entered: enteredPrice.toFixed(2), purchase_subtotal: subtotal,
+    unit_price: price, unit_price_entered: enteredPrice.toFixed(4), purchase_subtotal: subtotal,
     purchase_tax_amount: tax, purchase_total: total,
     invoice_requirement: requirement,
     item_notes: item.item_notes || null,
@@ -180,7 +180,7 @@ function normalizeItem(item: any, index: number, priceTaxMode: string) {
 function documentTotals(items: any[]) {
   const subtotal = roundMoney(items.reduce((sum, item) => sum + Number(item.purchase_subtotal), 0));
   const tax = roundMoney(items.reduce((sum, item) => sum + Number(item.purchase_tax_amount || 0), 0));
-  return { subtotal: subtotal.toFixed(2), tax: tax.toFixed(2), total: roundMoney(subtotal + tax).toFixed(2) };
+  return { subtotal: subtotal.toFixed(4), tax: tax.toFixed(4), total: roundMoney(subtotal + tax).toFixed(4) };
 }
 
 async function insertItems(conn: any, documentId: string, groupCode: string, items: any[]) {

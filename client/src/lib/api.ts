@@ -17,7 +17,16 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
 }
 
 export const jsonBody = (value: unknown) => JSON.stringify(value);
-export const money = (value: unknown) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(Number(value || 0));
+export const money = (value: unknown) => {
+  const n = Number(value || 0);
+  const isInt = Number.isInteger(n);
+  return new Intl.NumberFormat("id-ID", {
+    style: "currency",
+    currency: "IDR",
+    minimumFractionDigits: isInt ? 0 : 2,
+    maximumFractionDigits: 4,
+  }).format(n);
+};
 export const quantityText = (value: unknown) => new Intl.NumberFormat("id-ID", { maximumFractionDigits: 4 }).format(Number(value ?? 0));
 export const dateText = (value?: string | null) => value ? new Date(`${value.slice(0, 10)}T00:00:00`).toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" }) : "—";
 export const dateTimeText = (value?: string | null) => value ? new Date(value).toLocaleString("id-ID", { timeZone: "Asia/Jakarta", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
