@@ -482,7 +482,7 @@ export function InvoicePage({ user, onCreateInvoice, onEditInvoice, notify, navH
         return <tr key={key} id={`row-item-${item.id}`} className="transition hover:bg-slate-50/70">
           <td className="whitespace-nowrap px-3 py-2.5 text-slate-600">{dateText(invoice?.invoice_date || item.purchase_date || group.purchaseDate)}</td>
           <td className="whitespace-nowrap px-3 py-2.5">{invoice ? <button type="button" onClick={() => setSelectedInvoiceId(invoice.id)} className="font-medium text-blue-700 hover:text-blue-900 hover:underline">{invoice.nsfp}</button> : <span className="text-slate-400">—</span>}</td>
-          <td className="whitespace-nowrap px-3 py-2.5">{group.supplierName}</td>
+          <td className="whitespace-nowrap px-3 py-2.5">{item.supplier_name || group.supplierName}</td>
           <td className="max-w-[180px] whitespace-normal px-3 py-2.5">{item.project_name || "Tanpa project"}</td>
           <td className="max-w-[260px] whitespace-normal px-3 py-2.5 font-medium text-slate-900">{item.item_name}</td>
           <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">{quantityText(entry.quantity)}</td>
